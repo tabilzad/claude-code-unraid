@@ -7,6 +7,7 @@
 #   claude-unraid token clear         delete it
 #   claude-unraid token status        is one present (never prints it)
 #   claude-unraid verify              re-hash the installed binary against the pin
+#   claude-unraid migrate-login       copy a login made in fallback mode to the data dir
 #   claude-unraid doctor              self-checks plus `claude doctor`
 #   claude-unraid start|stop|attach|list|restore   supervised sessions (later phase)
 #
@@ -279,6 +280,29 @@ cmd_verify() {
 }
 
 # ---------------------------------------------------------------------------
+# A login made while the array was stopped lives in the RAM config. Copy just
+# the credentials file into the persistent config dir, never the whole
+# directory and never over an existing login (unless --force).
+cmd_migrate_login() {
+  local force=0 src dest_dir dest
+  [ "${1:-}" = --force ] && force=1
+  src="$RUN_DIR/fallback-config/.credentials.json"
+  [ -s "$src" ] || die "no login found in the fallback configuration ($(printf '%s' "${src#"$ROOT"}"))"
+  [ "$("$SCRIPTS/mode" get)" = pool ] || die "the array is not started (fallback mode); try again once it is"
+  dest_dir=$("$SCRIPTS/mode" config-dir)
+  dest="$ROOT$dest_dir/.credentials.json"
+  if [ -s "$dest" ] && [ "$force" = 0 ]; then
+    die "$dest_dir already holds a login; pass --force to replace it"
+  fi
+  mkdir -p -- "$ROOT$dest_dir"
+  chmod 0700 -- "$ROOT$dest_dir" 2>/dev/null || true
+  atomic_write "$dest" 0600 <"$src" || die "could not write $dest_dir/.credentials.json"
+  log notice "login migrated from fallback mode to $dest_dir"
+  printf 'claude-unraid: login copied to %s. The fallback copy stays in RAM until the next reboot.
+' "$dest_dir"
+}
+
+# ---------------------------------------------------------------------------
 cmd_doctor() {
   local fails=0 warns=0
   pass() { printf 'PASS  %s\n' "$*"; }
@@ -400,6 +424,10 @@ case "${1:-}" in
     cmd_token "$@"
     ;;
   verify) cmd_verify ;;
+  migrate-login)
+    shift
+    cmd_migrate_login "$@"
+    ;;
   doctor) cmd_doctor ;;
   start | stop | attach | list | restore)
     printf 'claude-unraid: %s is not available yet (supervised sessions arrive in a later phase).\n' "$1" >&2

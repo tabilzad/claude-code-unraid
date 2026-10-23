@@ -1,0 +1,58 @@
+#!/bin/bash
+# shellcheck disable=SC2329 # event_body and its helpers run indirectly: run_event -> with_lock -> event_body
+# stopping: the array is about to stop. Disks are still mounted here; by
+# stopping_array they are gone, so this is the last safe moment.
+#
+#   1. stop supervised sessions (claude-unraid stop --all --timeout 10),
+#      bounded to 12 s in total
+#   2. switch to fallback mode (forced, sessions are gone)
+#   3. report unsupervised `claude` processes whose cwd or open files are under
+#      /mnt: their working directory is about to disappear. They are only
+#      reported, never killed; they were not started by the plugin.
+#
+# Bounded by EVENT_TIMEOUT; always exits 0 (event-lib.sh).
+set -uo pipefail
+
+CCU_SCRIPT_NAME=event:stopping
+CCU_EVENT_NAME=stopping
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib.sh"
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/event-lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/event-lib.sh"
+SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)
+
+report_unsupervised() {
+  local pid cwd report="" supervised
+  supervised=$(supervised_pids | tr '\n' ' ')
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    case " $supervised " in *" $pid "*) continue ;; esac
+    if pid_touches "$pid" "$ROOT/mnt"; then
+      cwd=$(readlink "$PROC_DIR/$pid/cwd" 2>/dev/null || echo '?')
+      report="$report $pid (cwd ${cwd#"$ROOT"})"
+    fi
+  done < <(claude_pids)
+  if [ -n "$report" ]; then
+    log warning "unsupervised claude session(s) still using /mnt while the array stops:$report. They were not started by the plugin and are left alone; finish them with /exit, or run them as supervised sessions (claude-unraid start <workspace>) so the plugin can stop and restore them."
+  fi
+}
+
+event_body() {
+  local rc=0
+  if [ -x "$BIN_HELPER" ]; then
+    mkdir -p -- "$LOG_DIR"
+    run_with_timeout 12 "$BIN_HELPER" stop --all --timeout 10 >>"$LOG_DIR/sessions.log" 2>&1 || rc=$?
+    case "$rc" in
+      0) log info "supervised sessions stopped" ;;
+      69) log info "session supervision not available; nothing to stop" ;;
+      124 | 137) log warning "stopping supervised sessions took longer than 12s; continuing" ;;
+      *) log notice "stop --all exited with status $rc" ;;
+    esac
+  fi
+  "$SCRIPTS/mode" set fallback --force >/dev/null || log warning "could not switch to fallback mode"
+  log info "fallback mode active"
+  report_unsupervised
+  return 0
+}
+
+run_event "$@"

@@ -1,0 +1,68 @@
+#!/bin/bash
+# shellcheck disable=SC2329 # event_body and its helpers run indirectly: run_event -> with_lock -> event_body
+# disks_mounted: the array (and user shares) are mounted. Switch to pool mode.
+#
+#   1. validate the data directory; if it is not usable, notify and stay in
+#      fallback mode (never create a share: CLAUDE.md invariant 2)
+#   2. create <DATA_DIR>/config (0700), work (0755) and work/server (0755)
+#   3. if a login was made during fallback mode and the pool config has none,
+#      tell the user how to keep it; never merge configurations automatically
+#   4. switch the mode (forced: nothing supervised runs before pool mode)
+#   5. start the session restore in the background, detached from emhttpd
+#
+# Also run once by post-install when the plugin is installed while the array
+# is already started. Bounded by EVENT_TIMEOUT; always exits 0 (event-lib.sh).
+set -uo pipefail
+
+CCU_SCRIPT_NAME=event:disks_mounted
+CCU_EVENT_NAME=disks_mounted
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib.sh"
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/event-lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/event-lib.sh"
+SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)
+
+event_body() {
+  local line dd="" valid=no reason=""
+  while IFS= read -r line; do
+    case "$line" in
+      DATA_DIR=*) dd=${line#DATA_DIR=} ;;
+      VALID=*) valid=${line#VALID=} ;;
+      REASON=*) reason=${line#REASON=} ;;
+    esac
+  done < <("$SCRIPTS/data-dir" --ensure 2>/dev/null || true)
+
+  if [ "$valid" != yes ]; then
+    log warning "data directory ${dd:-unknown} not usable: ${reason:-unknown}; staying in fallback mode"
+    notify warning "Claude Code data directory not usable" "${dd:-The data directory}: ${reason:-unknown reason}. Claude Code keeps running from RAM (fallback mode); fix the path in the plugin settings."
+    return 0
+  fi
+
+  mkdir -p -- "$ROOT$dd/config" "$ROOT$dd/work" "$ROOT$dd/work/server"
+  chmod 0700 -- "$ROOT$dd/config" 2>/dev/null || true
+  chmod 0755 -- "$ROOT$dd/work" "$ROOT$dd/work/server" 2>/dev/null || true
+
+  local fallback_cfg="$RUN_DIR/fallback-config"
+  if [ -s "$fallback_cfg/.credentials.json" ] && [ ! -s "$ROOT$dd/config/.credentials.json" ]; then
+    log notice "a login was made in fallback mode; run 'claude-unraid migrate-login' to keep it"
+    notify normal "Claude Code: keep the login you made before the array started?" "You logged in while the array was stopped. To carry that login over to the persistent configuration, run: claude-unraid migrate-login"
+  fi
+
+  if ! "$SCRIPTS/mode" set pool --force >/dev/null; then
+    log warning "could not switch to pool mode"
+    return 0
+  fi
+  log info "pool mode active, data directory $dd"
+
+  if [ "$(cfg_bool RESTORE_SESSIONS yes)" = yes ] && [ -x "$BIN_HELPER" ]; then
+    mkdir -p -- "$LOG_DIR"
+    (
+      # Detach completely: emhttpd must not wait for the restore.
+      setsid nohup "$BIN_HELPER" restore >>"$LOG_DIR/restore.log" 2>&1 </dev/null &
+    )
+    log info "session restore started in the background (log: ${LOG_DIR#"$ROOT"}/restore.log)"
+  fi
+  return 0
+}
+
+run_event "$@"

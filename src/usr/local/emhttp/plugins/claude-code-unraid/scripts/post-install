@@ -16,6 +16,14 @@ mkdir -p -- "$RUN_DIR" "$LOG_DIR"
 if [ ! -f "$MODE_FILE" ]; then
   printf 'fallback\n' | atomic_write "$MODE_FILE" 0644
 fi
+# Installing while the array runs: the disks_mounted event already fired, so
+# run its logic once now (bounded by its own timeout) to land in pool mode.
+if [ "$(array_state)" = STARTED ]; then
+  event_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../event" 2>/dev/null && pwd)
+  if [ -n "$event_dir" ] && [ -x "$event_dir/disks_mounted" ]; then
+    "$event_dir/disks_mounted" >/dev/null 2>&1 || true
+  fi
+fi
 mode=$(cat "$MODE_FILE" 2>/dev/null || echo fallback)
 
 plugin_version="unknown"

@@ -1,0 +1,54 @@
+#!/bin/bash
+# shellcheck disable=SC2329 # event_body and its helpers run indirectly: run_event -> with_lock -> event_body
+# unmounting_disks: backstop before the shares are unmounted.
+#
+# Only processes the plugin itself started (PIDs recorded by the session
+# supervisor under /run/<plugin>/sessions/) that still hold their cwd or an
+# open file under the data directory are signalled: SIGTERM, up to 3 s to
+# exit, then SIGKILL. Anything else, including a user's own `claude`, is never
+# touched. Bounded by EVENT_TIMEOUT; always exits 0 (event-lib.sh).
+set -uo pipefail
+
+CCU_SCRIPT_NAME=event:unmounting_disks
+CCU_EVENT_NAME=unmounting_disks
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib.sh"
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/event-lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/event-lib.sh"
+SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)
+
+event_body() {
+  local dd pid targets=() alive
+  dd=$("$SCRIPTS/data-dir" 2>/dev/null) || dd=""
+  [ -n "$dd" ] || return 0
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    kill -0 "$pid" 2>/dev/null || continue
+    if pid_touches "$pid" "$ROOT$dd"; then
+      targets+=("$pid")
+    fi
+  done < <(supervised_pids)
+  [ "${#targets[@]}" -gt 0 ] || return 0
+
+  log warning "supervised session(s) still hold files under $dd: ${targets[*]}; sending SIGTERM"
+  for pid in "${targets[@]}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for _ in 1 2 3 4 5 6; do
+    alive=0
+    for pid in "${targets[@]}"; do
+      kill -0 "$pid" 2>/dev/null && alive=1
+    done
+    [ "$alive" = 0 ] && break
+    sleep 0.5
+  done
+  for pid in "${targets[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+      log warning "session $pid did not exit; killed"
+    fi
+  done
+  return 0
+}
+
+run_event "$@"

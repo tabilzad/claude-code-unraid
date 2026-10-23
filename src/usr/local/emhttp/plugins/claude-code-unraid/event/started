@@ -1,0 +1,29 @@
+#!/bin/bash
+# shellcheck disable=SC2329 # event_body and its helpers run indirectly: run_event -> with_lock -> event_body
+# started: the array start sequence finished. One status line to the syslog.
+# Bounded by EVENT_TIMEOUT; always exits 0 (event-lib.sh).
+set -uo pipefail
+
+CCU_SCRIPT_NAME=event:started
+CCU_EVENT_NAME=started
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib.sh"
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/event-lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/event-lib.sh"
+SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)
+
+event_body() {
+  local mode cver csource tver n=0 pid
+  mode=$("$SCRIPTS/mode" get 2>/dev/null || echo unknown)
+  cver=$(state_get "$BINARY_STATE" version 2>/dev/null || true)
+  csource=$(state_get "$BINARY_STATE" source 2>/dev/null || true)
+  tver=$(state_get "$TMUX_STATE" version 2>/dev/null || true)
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    kill -0 "$pid" 2>/dev/null && n=$((n + 1))
+  done < <(supervised_pids)
+  log info "array started: mode $mode, Claude Code ${cver:-unavailable}${csource:+ ($csource)}, tmux ${tver:-unavailable}, $n supervised session(s) running"
+  return 0
+}
+
+run_event "$@"
