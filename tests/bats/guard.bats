@@ -47,6 +47,11 @@ expect_allowed() {
   fi
 }
 
+# file_tool TOOL PATH -> the decision for a file-tool PreToolUse input.
+file_tool() {
+  php "$HI" write "$2" "$1" | env CCU_MOUNTINFO="${MI:-$MI_RO}" php "$GUARD" 2>/dev/null | php "$HD"
+}
+
 expect_ask() {
   run guard "$1"
   if [ "$status" -ne 0 ]; then
@@ -358,9 +363,6 @@ expect_ask() {
 }
 
 @test "file tools: writes to protected paths ask, others pass" {
-  file_tool() { # TOOL PATH
-    php "$HI" write "$2" "$1" | env CCU_MOUNTINFO="${MI:-$MI_RO}" php "$GUARD" 2>/dev/null | php "$HD"
-  }
   for tool in Write Edit MultiEdit NotebookEdit; do
     run file_tool "$tool" /etc/claude-code/managed-settings.d/99-claude-code-unraid-baseline.json
     [ "$status" -eq 0 ]
@@ -417,4 +419,63 @@ expect_ask() {
   [ "$(php "$REPO_ROOT/tests/helpers/json-get.php" "$BATS_TEST_TMPDIR/ask.json" hookSpecificOutput.hookEventName)" = '"PreToolUse"' ]
   [ "$(php "$REPO_ROOT/tests/helpers/json-get.php" "$BATS_TEST_TMPDIR/ask.json" hookSpecificOutput.permissionDecision)" = '"ask"' ]
   assert_contains "$(php "$REPO_ROOT/tests/helpers/json-get.php" "$BATS_TEST_TMPDIR/ask.json" hookSpecificOutput.permissionDecisionReason)" "claude-code-unraid guard: reaches the network"
+}
+
+@test "path aliasing: /proc/<pid>/root and .. are seen through" {
+  # the path behind the gateway meets the block tier as if it were given directly
+  expect_blocked 'dd if=/tmp/x of=/proc/1/root/dev/sda'
+  expect_blocked 'cat /tmp/x > /proc/1/root/dev/sda'
+  expect_blocked 'cp img /proc/1/root/dev/sdb'
+  expect_blocked 'rm -rf /proc/1/root/mnt/user'
+  expect_blocked 'rm -rf /proc/self/root/mnt'
+  expect_blocked 'mkfs.ext4 /proc/1/root/dev/sdb'
+  # any other use of the gateway asks, flash writes included, even with /boot read-only here
+  MI="$MI_RO"
+  expect_ask 'echo x > /proc/1/root/boot/config/go' "/proc/<pid>/root"
+  expect_ask 'ls /proc/1234/root/etc' "/proc/<pid>/root"
+  expect_ask 'cp x /proc/1/root' "/proc/<pid>/root"
+  expect_ask 'cat /proc/thread-self/root/etc/hosts' "/proc/<pid>/root"
+  expect_ask 'tee /proc/1/root/etc/claude-code/x.json < y' "/proc/<pid>/root"
+  expect_ask 'cp x /proc/1/cwd/' "/proc/<pid>/cwd"
+  # reading a process's links stays silent
+  expect_allowed 'readlink /proc/1234/cwd'
+  expect_allowed 'ls -l /proc/1234/exe /proc/1234/cwd'
+  expect_allowed 'cat /proc/1234/status'
+  expect_allowed 'ls /proc/1234/rootfs'
+  # ".." is folded before the path rules see the command
+  expect_ask 'tee /etc/foo/../claude-code/managed-settings.d/x.json < y' "policy"
+  expect_ask 'cp x /usr/local/emhttp/plugins/other/../claude-code-unraid/policy/guard' "policy"
+  expect_blocked 'rm -rf /mnt/user/..'
+  expect_blocked 'rm -rf /mnt/user/share/../../..'
+  expect_blocked 'rm -rf /tmp/../mnt/user'
+  expect_blocked 'rm -rf /mnt/../'
+  expect_blocked 'rm -rf /..'
+  expect_allowed 'rm -rf /mnt/user/appdata/x/../y/cache' # a specific directory once folded; never matched the rm rule before either
+  expect_allowed 'ls /mnt/user/../user/appdata'
+  expect_allowed 'rm -rf /tmp/build/../cache'
+  MI="$MI_RW"
+  expect_ask 'cp x /tmp/../boot/config/go' "flash drive"
+}
+
+@test "file tools: /proc/<pid>/root and .. aliases are seen through" {
+  run file_tool Write /etc/foo/../claude-code/managed-settings.d/x.json
+  assert_contains "$output" "managed Claude Code policy"
+  run file_tool Edit /usr/local/bin/../bin/claude
+  assert_contains "$output" "launcher or helper"
+  run file_tool Write /proc/1/root/etc/claude-code/x.json
+  assert_contains "$output" "managed Claude Code policy"
+  MI="$MI_RO"
+  run file_tool Write /proc/1/root/boot/config/go
+  assert_contains "$output" "flash drive through /proc/<pid>/root"
+  run file_tool Write /proc/4242/root/tmp/notes.md
+  assert_contains "$output" "another mount namespace through /proc/<pid>/root"
+  run file_tool Write /proc/1/rootfs/x
+  [ "$output" = allow ]
+  run file_tool Write /mnt/user/appdata/x/../y/notes.md
+  [ "$output" = allow ]
+  run file_tool Write /tmp/../boot/config/go
+  [ "$output" = allow ]
+  MI="$MI_RW"
+  run file_tool Write /tmp/../boot/config/go
+  assert_contains "$output" "flash drive, which is writable"
 }

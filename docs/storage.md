@@ -87,8 +87,12 @@ do not store a token.
 ## `/boot` is read-only for the agent
 
 `claude` runs Claude Code in a private mount namespace where `/boot` is remounted
-read-only. The agent can read the flash drive (plugin configs, `go` file, `syslinux.cfg`)
-but cannot write to it, whatever it is asked. To allow writes for one session:
+read-only. The agent can read the flash drive (plugin configs, `go` file, `syslinux.cfg`),
+and a plain write to it fails in the kernel. One way around exists, because the session
+is still root in the host's PID namespace: `/proc/<pid>/root/boot` of a host process is
+the writable host view. The guard asks before that path is used and logs it, but it
+matches text (`docs/SECURITY.md`, "The read-only flash drive and its limit"). To allow
+writes for one session:
 
 ```sh
 claude --boot-rw

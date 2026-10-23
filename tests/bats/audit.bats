@@ -43,6 +43,12 @@ logged() { calls logger | sed 's/\\\(.\)/\1/g'; }
     'export GITHUB_TOKEN=ghp_hunter2hunter2hunter2hunter2' \
     'SLACK=xoxb-hunter2-hunter2-hunter2 ./bot' \
     'cat secret: hunter2secret' \
+    'mysql -u root -phunter2glued mydb' \
+    'env PGPASSWORD=hunter2pg psql -h db' \
+    'MYSQL_PWD=hunter2pwd mysqldump db' \
+    'sshpass -p hunter2ssh ssh host' \
+    'rclone config create r webdav pass hunter2rclone' \
+    'restic -r /mnt/user/b init # passphrase: hunter2phrase' \
     'password: hunter2colon'; do
     : >"$FAKEROOT/calls.log"
     audit_bash "$cmd"
@@ -56,6 +62,9 @@ logged() { calls logger | sed 's/\\\(.\)/\1/g'; }
 @test "non-secret text that only looks similar is kept" {
   audit_bash 'grep -r "token bucket" /etc/nginx; ls /mnt/user/Passwords-Archive'
   assert_contains "$(logged)" 'grep -r "token bucket" /etc/nginx; ls /mnt/user/Passwords-Archive'
+  : >"$FAKEROOT/calls.log"
+  audit_bash 'mysql -u root -p mydb; mkdir -p /tmp/x; passwd root; ps -p 1; echo tokenizer=bpe'
+  assert_contains "$(logged)" 'mysql -u root -p mydb; mkdir -p /tmp/x; passwd root; ps -p 1; echo tokenizer=bpe'
 }
 
 @test "long commands are truncated to 300 characters" {

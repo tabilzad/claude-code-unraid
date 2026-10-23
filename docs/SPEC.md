@@ -13,7 +13,7 @@ degrade where not.
 - Survive reboots: binary, login, settings, memory, transcripts, per-project trust and MCP config persist.
 - Restore sessions: conversations that were live at shutdown come back after `disks_mounted`, and every other conversation stays resumable with `claude --resume` or `claude --continue`.
 - Keep working with the array stopped and with Docker disabled. This is the reason a plugin is justified over a container.
-- Wrap a root agent in enforced policy: manual permission mode, no bypass mode, a guard hook, an audit trail, and a kernel-enforced read-only `/boot` by default.
+- Wrap a root agent in enforced policy: manual permission mode, no bypass mode, a guard hook, an audit trail, and a read-only `/boot` by default (a private mount namespace; `docs/SECURITY.md` states the `/proc/<pid>/root` limit).
 - Meet Unraid plugin conventions and CA requirements.
 
 **Non-goals**
@@ -29,7 +29,7 @@ degrade where not.
 | Tampered plugin package | `<SHA256>` on every `<FILE>`; releases built only by CI from tags |
 | Tampered tmux package | SHA256 pinned in the `.plg` from a package whose Slackware signature CI verified; the box verifies the sha256 before extracting |
 | Prompt injection through logs or files the agent reads | Manual mode; guard ask-tier for network, exfiltration, `curl\|sh`, mounts, cron; audit log |
-| Agent writes to the flash drive or bricks the boot config | `/boot` remounted read-only in Claude's private mount namespace unless the user explicitly allows it per session |
+| Agent writes to the flash drive or bricks the boot config | `/boot` remounted read-only in Claude's private mount namespace unless the user explicitly allows it per session; the `/proc/<pid>/root` gateway to the host view is guarded (ask) and logged, not closed (`docs/SECURITY.md`) |
 | Agent weakens its own policy | Baseline drop-in restored at every boot and loads last; guard asks before writes to `/etc/claude-code`, the plugin dirs and the launcher; `disableBypassPermissionsMode` |
 | Token theft | Tokens never in args, HTML or logs. The emergency token is opt-in, and the user is warned about flash SMB export |
 | Remote takeover through a claude.ai account | Remote Control is disabled by managed policy unless the user enables it |

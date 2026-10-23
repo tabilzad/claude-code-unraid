@@ -16,6 +16,7 @@ require_once __DIR__ . '/status.php';
 
 const CCU_ACTIONS = ['status', 'verify', 'restore', 'stop-all', 'log'];
 const CCU_LOG_LINES = 200;
+const CCU_LOG_MAX_BYTES = 524288; // same cap as lib.sh LOG_MAX_BYTES
 
 function ccu_run_action(string $action): array
 {
@@ -38,6 +39,10 @@ function ccu_run_action(string $action): array
             // page re-read the status.
             $log = $root . '/var/log/' . CCU_PLUGIN . '/restore.log';
             @mkdir(dirname($log), 0755, true);
+            // Bounded like every other plugin log: one generation past 512 KiB.
+            if (is_file($log) && (int) @filesize($log) > CCU_LOG_MAX_BYTES) {
+                @rename($log, $log . '.1');
+            }
             $cmd = 'setsid nohup ' . escapeshellarg(ccu_helper_bin()) . ' restore >> ' . escapeshellarg($log) . ' 2>&1 < /dev/null &';
             exec($cmd);
             return ['ok' => true, 'action' => 'restore', 'output' => ['restore started in the background; see /var/log/' . CCU_PLUGIN . '/restore.log']];

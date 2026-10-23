@@ -11,8 +11,14 @@
  *
  * Permission deny rules only match the outermost command, so `Bash(mkfs*)`
  * does not stop `sh -c 'mkfs.ext4 /dev/sdb'`. This hook looks at the whole
- * command string, in any wrapper, after a light normalisation (empty quote
- * pairs, backslashes, // and /./).
+ * command string, in any wrapper, after a light normalisation: empty quote
+ * pairs and backslashes are dropped, // and /./ collapse, "/x/.." is folded
+ * lexically (/etc/foo/../claude-code is seen as /etc/claude-code), and a
+ * /proc/<pid>/root prefix (another process's mount namespace: the host's,
+ * where the flash drive is writable) is stripped so that the path behind it
+ * meets the same rules, while using the gateway at all asks. The rules run on
+ * the text before and after the ".." folding, so a symlink that makes the
+ * lexical result too optimistic never loosens a rule.
  *
  * It matches text. A command assembled from variables, written to a script
  * first, or obfuscated beyond simple quoting is outside its reach. It is a
@@ -84,6 +90,54 @@ function bootMode(): string
     return $mode;
 }
 
+// Patterns are full of slashes, so the delimiter is a control character that
+// can never appear in them. The m flag makes ^ and $ work per line, like the
+// line-based grep the rules were written for (a newline separates commands).
+const D = "\x01";
+const DM = "\x01m";
+
+// Another process's root directory. For a host process (pid 1, emhttpd, any
+// shell outside this session) that is the host's mount namespace, where /boot
+// is writable and /dev/sdX, /mnt and the policy files sit behind a prefix the
+// path rules would not see.
+const PROC_GATEWAY = '/proc/(?:[0-9]+|self|thread-self)/root';
+
+/** Fold "/./" and "/x/.." lexically in one absolute path (symlinks are not followed). */
+function lexicalPath(string $p): string
+{
+    $out = [];
+    foreach (explode('/', $p) as $seg) {
+        if ($seg === '' || $seg === '.') {
+            continue;
+        }
+        if ($seg === '..') {
+            array_pop($out);
+            continue;
+        }
+        $out[] = $seg;
+    }
+    return (str_starts_with($p, '/') ? '/' : '') . implode('/', $out);
+}
+
+/** Fold "/x/.." lexically in every path-like token of a command string. */
+function foldDotDot(string $s, string $T): string
+{
+    $seg = '[^/\s"\';&|<>()]+';
+    for ($i = 0; $i < 64; $i++) {
+        $next = preg_replace(D . "/(?!\\.\\.(?:/|{$T}))(?:{$seg})/\\.\\.(?=/|{$T})" . DM, '/', $s);
+        if ($next === null) {
+            return $s;
+        }
+        $next = preg_replace('#/+#', '/', $next) ?? $next;
+        if ($next === $s) {
+            break;
+        }
+        $s = $next;
+    }
+    // "/.." at the root stays at the root.
+    return preg_replace(D . "(?<=^|[\\s\"'=;&|<>(])/\\.\\.(?=/|{$T})" . DM, '/', $s) ?? $s;
+}
+
 // ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
@@ -115,25 +169,38 @@ if (in_array($tool, ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'], true)) {
     }
     $norm = preg_replace('#/+#', '/', str_replace('\\', '/', $path)) ?? $path;
     $norm = preg_replace('#/(\./)+#', '/', $norm) ?? $norm;
+    $viaProc = preg_match('#^' . PROC_GATEWAY . '(?:/|$)#', $norm) === 1;
+    if ($viaProc) {
+        $norm = preg_replace('#^' . PROC_GATEWAY . '#', '', $norm) ?? $norm;
+        $norm = $norm === '' ? '/' : $norm;
+    }
     $protected = [
         '/etc/claude-code' => 'edits the managed Claude Code policy',
         '/usr/local/bin/claude' => 'edits the Claude Code launcher or helper',
         '/usr/local/emhttp/plugins/' . PLUGIN => 'edits the plugin that enforces this policy',
         '/usr/local/lib/' . PLUGIN => 'edits the installed Claude Code binary or tmux',
     ];
-    foreach ($protected as $prefix => $why) {
-        if ($prefix === '/usr/local/bin/claude') {
-            if (preg_match('#^/usr/local/bin/claude(-unraid)?$#', $norm)) {
-                ask("$why ($norm)");
+    // Checked as written and with "/x/.." folded (/etc/foo/../claude-code).
+    foreach (array_unique([$norm, lexicalPath($norm)]) as $candidate) {
+        foreach ($protected as $prefix => $why) {
+            if ($prefix === '/usr/local/bin/claude') {
+                if (preg_match('#^/usr/local/bin/claude(-unraid)?$#', $candidate)) {
+                    ask("$why ($path)");
+                }
+                continue;
             }
-            continue;
+            if ($candidate === $prefix || str_starts_with($candidate, $prefix . '/')) {
+                ask("$why ($path)");
+            }
         }
-        if ($norm === $prefix || str_starts_with($norm, $prefix . '/')) {
-            ask("$why ($norm)");
+        if (preg_match('#^/boot(/|$)#', $candidate) && ($viaProc || bootMode() === 'rw')) {
+            ask($viaProc
+                ? "writes to the flash drive through /proc/<pid>/root, where this session's read-only remount does not apply ($path)"
+                : "writes to the flash drive, which is writable in this session ($path)");
         }
     }
-    if (preg_match('#^/boot(/|$)#', $norm) && bootMode() === 'rw') {
-        ask("writes to the flash drive, which is writable in this session ($norm)");
+    if ($viaProc) {
+        ask("reaches another mount namespace through /proc/<pid>/root, where the read-only flash drive and this policy's path rules do not apply ($path)");
     }
     exit(0);
 }
@@ -180,6 +247,16 @@ $BLOCKDEV = '/dev/(?:sd|hd|vd|xvd|nvme|md|mmcblk|nbd|loop|sr|zd|dm-|mapper/|disk
 // smartctl options that change device state (the self-test is in the ask tier).
 $SMART_STATE = '(?:-(?:s|o|S|X)|--(?:smart|offlineauto|saveauto|abort|set))(?:[=\s]|$)';
 
+// /proc/<pid>/root: the path behind the gateway is matched as if it were given
+// directly (dd, rm and mkfs through it still hit the block tier); using the
+// gateway at all asks, right after the block tier.
+$viaProc = preg_match(D . PROC_GATEWAY . "(?=/|{$T})" . DM, $norm) === 1;
+if ($viaProc) {
+    $norm = preg_replace(D . PROC_GATEWAY . "(?=/|{$T})" . DM, '', $norm) ?? $norm;
+}
+// Every rule sees the command as written and with "/x/.." folded.
+$forms = array_unique([$norm, foldDotDot($norm, $T)]);
+
 $blockRules = [
     'mkfs' => "{$B}mkfs(?:\\.[[:alnum:]]+)?$T",
     'wipefs' => "{$B}wipefs$T",
@@ -193,16 +270,19 @@ $blockRules = [
         "{$B}smartctl\\s+(?:[^;&|]*\\s)?(?:{$SMART_STATE}|-l\\s+scterc,[0-9])",
 ];
 
-// Patterns are full of slashes, so the delimiter is a control character that
-// can never appear in them. The m flag makes ^ and $ work per line, like the
-// line-based grep the rules were written for (a newline separates commands).
-const D = "\x01";
-const DM = "\x01m";
-
-foreach ($blockRules as $label => $re) {
-    if (preg_match(D . $re . DM, $norm)) {
-        block($label);
+foreach ($forms as $form) {
+    foreach ($blockRules as $label => $re) {
+        if (preg_match(D . $re . DM, $form)) {
+            block($label);
+        }
     }
+}
+
+if ($viaProc) {
+    ask("reaches another mount namespace through /proc/<pid>/root, where the read-only flash drive and this policy's path rules do not apply");
+}
+if (preg_match(D . '/proc/(?:[0-9]+|self|thread-self)/cwd/' . DM, $norm)) {
+    ask("reaches a host process's working directory through /proc/<pid>/cwd/");
 }
 
 // ---------------------------------------------------------------------------
@@ -254,17 +334,23 @@ $askRules = [
         "{$B}smartctl\\s+(?:[^;&|]*\\s)?(?:-t|--test)(?:[=\\s]|$)",
 ];
 
-foreach ($askRules as $label => $re) {
-    if (preg_match(D . $re . DM, $norm)) {
-        ask($label);
+foreach ($forms as $form) {
+    foreach ($askRules as $label => $re) {
+        if (preg_match(D . $re . DM, $form)) {
+            ask($label);
+        }
     }
 }
 
 // Last, so that a more specific reason (network, deletion) wins over this one.
-// The kernel enforces the read-only flash drive in normal sessions; this rule
+// The read-only remount makes flash writes fail in normal sessions; this rule
 // only adds a reason when the drive is writable (a --boot-rw session).
-if (preg_match(D . $FLASH_TOUCH . DM, $norm) && bootMode() === 'rw') {
-    ask('touches the Unraid flash drive, which is writable in this session');
+if (bootMode() === 'rw') {
+    foreach ($forms as $form) {
+        if (preg_match(D . $FLASH_TOUCH . DM, $form)) {
+            ask('touches the Unraid flash drive, which is writable in this session');
+        }
+    }
 }
 
 exit(0);

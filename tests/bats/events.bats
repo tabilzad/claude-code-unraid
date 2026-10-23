@@ -252,3 +252,19 @@ bg() {
   [ "$status" -eq 0 ]
   grep -q 'could not switch to fallback mode' "$LOG"
 }
+
+@test "restore.log and sessions.log are rotated once they pass the size cap" {
+  mkdir -p "$FAKEROOT/var/log/$PLUGIN"
+  yes x | head -c 600000 >"$FAKEROOT/var/log/$PLUGIN/restore.log"
+  run "$EVENT/disks_mounted"
+  [ "$status" -eq 0 ]
+  sleep 1
+  [ -f "$FAKEROOT/var/log/$PLUGIN/restore.log.1" ]
+  [ "$(stat -c %s "$FAKEROOT/var/log/$PLUGIN/restore.log")" -lt 1000 ]
+  "$SCR/mode" set pool >/dev/null
+  yes x | head -c 600000 >"$FAKEROOT/var/log/$PLUGIN/sessions.log"
+  run "$EVENT/stopping"
+  [ "$status" -eq 0 ]
+  [ -f "$FAKEROOT/var/log/$PLUGIN/sessions.log.1" ]
+  [ "$(stat -c %s "$FAKEROOT/var/log/$PLUGIN/sessions.log")" -lt 1000 ]
+}

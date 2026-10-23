@@ -56,15 +56,23 @@ test_mode=0
 # log LEVEL MESSAGE...   LEVEL: info|notice|warning|err
 #   Appends to the bounded plugin log and forwards to syslog via logger.
 #   Never fails and never prints secrets (callers must not pass any).
+# rotate_log FILE   Keeps FILE under LOG_MAX_BYTES: moves it to FILE.1 (one
+#   generation) once it is larger. Every plugin log goes through this, so none
+#   can grow without bound between reboots.
+rotate_log() {
+  local f=$1
+  if [ -f "$f" ] && [ "$(stat -c %s "$f" 2>/dev/null || echo 0)" -gt "$LOG_MAX_BYTES" ]; then
+    mv -f "$f" "$f.1" 2>/dev/null || true
+  fi
+}
+
 log() {
   local level=$1
   shift
   local msg="$*" ts
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   if mkdir -p "$LOG_DIR" 2>/dev/null; then
-    if [ -f "$INSTALL_LOG" ] && [ "$(stat -c %s "$INSTALL_LOG" 2>/dev/null || echo 0)" -gt "$LOG_MAX_BYTES" ]; then
-      mv -f "$INSTALL_LOG" "$INSTALL_LOG.1" 2>/dev/null || true
-    fi
+    rotate_log "$INSTALL_LOG"
     printf '%s [%s] %s: %s\n' "$ts" "$level" "${CCU_SCRIPT_NAME:-${0##*/}}" "$msg" >>"$INSTALL_LOG" 2>/dev/null || true
   fi
   logger -t "$PLUGIN" -p "user.$level" -- "${CCU_SCRIPT_NAME:-${0##*/}}: $msg" 2>/dev/null || true

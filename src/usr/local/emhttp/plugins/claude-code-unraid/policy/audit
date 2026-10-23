@@ -6,10 +6,12 @@
  *   logger -t claude-code-unraid-audit -- session=<id> cwd=<cwd> tool=<name> [cmd=<...>|path=<...>]
  *
  * For Bash the command is truncated to 300 characters and obvious secrets are
- * redacted first: --password=..., token=..., api keys, Authorization headers,
- * Bearer tokens, AWS access key ids, Anthropic/OpenAI/GitHub/Slack key shapes
- * and user:password@ in URLs. For file tools the path is logged. Tool output
- * is never read. Nothing here can block or fail Claude: every path exits 0.
+ * redacted first: --password=..., -p PASS and the glued mysql -pPASS,
+ * sshpass -p, FOO_PASSWORD=/MYSQL_PWD=/token= style assignments, "passphrase:",
+ * a bare "pass X", api keys, Authorization headers, Bearer tokens, AWS access
+ * key ids, Anthropic/OpenAI/GitHub/Slack key shapes and user:password@ in
+ * URLs. For file tools the path is logged. Tool output is never read. Nothing
+ * here can block or fail Claude: every path exits 0.
  */
 declare(strict_types=1);
 
@@ -24,7 +26,13 @@ function redact(string $s): string
 {
     $rules = [
         '/(--?(?:password|passwd|pass|pw|secret|api[_-]?key|token|auth)(?:=|\s+))(["\']?)\S+/i' => '$1$2[redacted]',
-        '/(\b(?:password|passwd|secret|api[_-]?key|access[_-]?key|token)\s*[=:]\s*)(["\']?)[^\s"\']+/i' => '$1$2[redacted]',
+        // mysql-family clients take the password glued to -p (mysql -u root -pSECRET)
+        '/((?:^|[\s;&|(])(?:mysql|mysqldump|mysqladmin|mysqlcheck|mariadb|mariadb-dump)\b[^;&|]*?\s-p)(?=[^\s-])\S+/i' => '$1[redacted]',
+        '/(\bsshpass\s+-p\s*)(["\']?)\S+/i' => '$1$2[redacted]',
+        // KEY=value and key: value, with any prefix (PGPASSWORD=, MYSQL_PWD=, DB_SECRET=)
+        '/([A-Za-z0-9_-]*(?:password|passwd|passphrase|secret|api[_-]?key|access[_-]?key|token|pwd)\s*[=:]\s*)(["\']?)[^\s"\']+/i' => '$1$2[redacted]',
+        // a bare "pass X" / "password X" argument (rclone config, restic, pass-style tools)
+        '/(\bpass(?:word|phrase)?\s+)(?!-)(["\']?)\S+/i' => '$1$2[redacted]',
         '/(Authorization\s*:\s*)(?:\S+\s+)?\S+/i' => '$1[redacted]',
         '/(\bBearer\s+)\S+/i' => '$1[redacted]',
         '/AKIA[0-9A-Z]{16}/' => '[redacted-aws-key-id]',

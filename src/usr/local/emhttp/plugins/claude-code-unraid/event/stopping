@@ -42,6 +42,7 @@ event_body() {
   local rc=0
   if [ -x "$BIN_HELPER" ]; then
     mkdir -p -- "$LOG_DIR"
+    rotate_log "$LOG_DIR/sessions.log"
     run_with_timeout 12 "$BIN_HELPER" stop --all --timeout 10 --mark-restore >>"$LOG_DIR/sessions.log" 2>&1 || rc=$?
     case "$rc" in
       0) log info "supervised sessions stopped" ;;

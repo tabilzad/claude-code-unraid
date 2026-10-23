@@ -122,3 +122,18 @@ function test_helper_bin_is_fixed_and_root_prefixed(): void
     assert_same("$root/usr/local/bin/claude-unraid", ccu_helper_bin());
     assert_same('&lt;b&gt;&quot;x&quot;&apos;', ccu_h('<b>"x"\''));
 }
+
+function test_restore_rotates_a_large_log(): void
+{
+    $root = actions_root();
+    $log = "$root/var/log/claude-code-unraid/restore.log";
+    file_put_contents($log, str_repeat('x', 600000));
+    $r = ccu_run_action('restore');
+    assert_same(true, $r['ok']);
+    usleep(500000);
+    clearstatcache();
+    assert_true(is_file("$log.1"), 'large restore.log rotated to .1');
+    assert_true(!is_file($log) || filesize($log) < 1000, 'a fresh restore.log was started');
+    unlink("$log.1");
+    @unlink($log);
+}
