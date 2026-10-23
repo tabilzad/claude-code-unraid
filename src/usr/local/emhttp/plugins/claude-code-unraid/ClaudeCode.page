@@ -1,0 +1,209 @@
+Menu="Utilities"
+Type="xmenu"
+Title="Claude Code"
+Icon="terminal"
+---
+<?PHP
+/* Claude Code for Unraid: settings page (SPEC section 12).
+ *
+ * Copyright (c) 2026 tabilzad. MIT License (https://github.com/tabilzad/claude-code-unraid).
+ * Not affiliated with Anthropic PBC or Lime Technology, Inc.
+ *
+ * Everything shown comes from `claude-unraid status --json`. Settings are saved
+ * through Unraid's /update.php (CSRF enforced globally), validated server-side
+ * by include/update.cfg.php, and the policy is re-rendered by install-policy
+ * right after the save. Buttons post to include/exec.php (action allowlist).
+ * No token, account e-mail or transcript content ever reaches this page.
+ */
+$docroot ??= ($_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp');
+require_once "$docroot/plugins/claude-code-unraid/include/status.php";
+
+$ccu_status = ccu_status();
+$ccu_cfg = ccu_cfg();
+$ccu_claude = $ccu_status['claude'] ?? [];
+$ccu_tmux = $ccu_status['tmux'] ?? [];
+$ccu_dd = $ccu_status['data_dir'] ?? [];
+$ccu_auth = $ccu_status['auth'] ?? [];
+$ccu_sessions = is_array($ccu_status['sessions'] ?? null) ? $ccu_status['sessions'] : [];
+$ccu_policy = is_array($ccu_status['policy_files'] ?? null) ? $ccu_status['policy_files'] : [];
+$ccu_remote_on = strtolower((string) ($ccu_cfg['REMOTE_CONTROL'] ?? 'no')) === 'yes';
+
+$ccu_warnings = [];
+if (($ccu_status['flash_exported'] ?? false) === true) {
+  $ccu_warnings[] = 'The flash share is exported over SMB. The plugin settings and policy drop-ins are readable by anyone who can reach it'
+    . (($ccu_auth['emergency_token'] ?? false) === true ? ', and so is the emergency token. Set Main, Boot Device, Flash, SMB Security Settings, Export to No, or clear the token.' : '.');
+}
+if (($ccu_dd['fuse'] ?? false) === true) {
+  $ccu_warnings[] = 'The data directory is on /mnt/user (FUSE). A direct pool path such as /mnt/cache/appdata/claude-code-unraid is faster and keeps the mover away from Claude\'s transcripts.';
+}
+if (($ccu_auth['emergency_token'] ?? false) === true) {
+  $ccu_warnings[] = 'An emergency token is stored on the flash drive. It is used only while the array is stopped and grants access to your Claude account; keep the flash share unexported.';
+}
+if ($ccu_remote_on) {
+  $ccu_warnings[] = 'Remote Control is allowed. Supervised sessions started with it can be driven from claude.ai or the Claude app, and their transcripts are stored on Anthropic\'s servers while connected.';
+}
+if ($ccu_status === []) {
+  $ccu_warnings[] = 'The plugin helper did not answer (claude-unraid status --json). Reinstall the plugin or check /var/log/claude-code-unraid/install.log.';
+}
+function ccu_select(string $name, string $current): string {
+  $out = '<select name="' . ccu_h($name) . '">';
+  foreach (['no' => 'No', 'yes' => 'Yes'] as $v => $label) {
+    $out .= '<option value="' . $v . '"' . ($current === $v ? ' selected' : '') . '>' . $label . '</option>';
+  }
+  return $out . '</select>';
+}
+?>
+
+<div markdown="1">
+**Claude Code for Unraid** installs Anthropic's Claude Code CLI on the host, keeps its login and conversations across reboots, and wraps it in an enforced policy. *This plugin is not affiliated with, endorsed by, or supported by Anthropic PBC or Lime Technology, Inc.* **Claude Code runs as root on this server**: the permission prompts in your terminal are your control. Read `docs/SECURITY.md` in the project before relying on it.
+</div>
+
+<?if ($ccu_warnings):?>
+<div markdown="1" class="ccu-warnings">
+<?foreach ($ccu_warnings as $ccu_w):?>
+<p><i class="fa fa-warning"></i> <?=ccu_h($ccu_w)?></p>
+<?endforeach;?>
+</div>
+<?endif;?>
+
+<div markdown="1">
+### Status
+
+_(Plugin)_:
+: <?=ccu_h($ccu_status['plugin_version'] ?? 'unknown')?>
+
+_(Claude Code)_:
+: <?if (($ccu_claude['version'] ?? '') !== ''):?><?=ccu_h($ccu_claude['version'])?> (<?=ccu_h($ccu_claude['source'] ?? '')?>, verified: <?=ccu_yesno($ccu_claude['verified'] ?? false)?>)<?if (($ccu_claude['error'] ?? '') !== ''):?> <span class="orange-text">degraded: <?=ccu_h($ccu_claude['error'])?></span><?endif;?><?else:?><span class="red-text">not available<?if (($ccu_claude['error'] ?? '') !== ''):?>: <?=ccu_h($ccu_claude['error'])?><?endif;?></span><?endif;?>
+
+_(tmux)_:
+: <?if (($ccu_tmux['available'] ?? false) === true):?><?=ccu_h($ccu_tmux['version'] ?? '')?><?else:?><span class="orange-text">not available (supervised sessions disabled)<?if (($ccu_tmux['error'] ?? '') !== ''):?>: <?=ccu_h($ccu_tmux['error'])?><?endif;?></span><?endif;?>
+
+_(Storage mode)_:
+: <?=ccu_h($ccu_status['mode'] ?? 'unknown')?> (config dir <?=ccu_h($ccu_status['config_dir'] ?? '')?>)
+
+_(Data directory)_:
+: <?=ccu_h($ccu_dd['path'] ?? '')?><?if (($ccu_dd['valid'] ?? false) !== true):?> <span class="orange-text">not usable: <?=ccu_h($ccu_dd['reason'] ?? '')?></span><?elseif (($ccu_dd['fuse'] ?? false) === true):?> (on /mnt/user, FUSE)<?endif;?>
+
+_(Login present)_:
+: <?=ccu_yesno($ccu_auth['login'] ?? false)?>
+
+_(Emergency token)_:
+: <?=ccu_yesno($ccu_auth['emergency_token'] ?? false)?> (managed with `claude-unraid token`)
+
+_(Policy files)_:
+: <?=ccu_h($ccu_policy ? implode(', ', array_map('strval', $ccu_policy)) : 'none')?>
+
+</div>
+
+<div markdown="1">
+### Sessions
+
+<table class="ccu-sessions">
+<tr><th>Workspace</th><th>State</th><th>Session</th><th>Started</th><th>Attach</th></tr>
+<?if ($ccu_sessions):?>
+<?foreach ($ccu_sessions as $ccu_s):?>
+<?[$ccu_ws, $ccu_state, $ccu_sid, $ccu_started] = array_pad(explode('|', (string) $ccu_s, 4), 4, '');?>
+<tr><td><?=ccu_h($ccu_ws)?></td><td><?=ccu_h($ccu_state)?></td><td><?=ccu_h(substr($ccu_sid, 0, 12))?></td><td><?=ccu_h($ccu_started)?></td><td><code>claude-unraid attach <?=ccu_h($ccu_ws)?></code></td></tr>
+<?endforeach;?>
+<?else:?>
+<tr><td colspan="5">No supervised sessions. Start one from a terminal with <code>claude-unraid start &lt;workspace&gt;</code>.</td></tr>
+<?endif;?>
+</table>
+
+<input type="button" value="_(Verify binary)_" onclick="ccuAction('verify')">
+<input type="button" value="_(Restore sessions)_" onclick="ccuAction('restore')">
+<input type="button" value="_(Stop all sessions)_" onclick="ccuConfirmStop()">
+<input type="button" value="_(View log)_" onclick="openTerminal('log','Claude Code','claude-code-unraid/install.log')">
+</div>
+
+<form markdown="1" method="POST" action="/update.php" target="progressFrame">
+<input type="hidden" name="#file" value="claude-code-unraid/claude-code-unraid.cfg">
+<input type="hidden" name="#include" value="/plugins/claude-code-unraid/include/update.cfg.php">
+<input type="hidden" name="#command" value="/plugins/claude-code-unraid/scripts/install-policy">
+
+### Settings
+
+_(Data directory)_:
+: <input type="text" name="DATA_DIR" maxlength="200" value="<?=ccu_h($ccu_cfg['DATA_DIR'] ?? '')?>" placeholder="auto: <appdata>/claude-code-unraid" spellcheck="false">
+
+:ccu_data_dir_plug:
+Where the login, settings and transcripts live, as `CLAUDE_CONFIG_DIR`. Leave empty for `<appdata>/claude-code-unraid` (the plugin picks the direct pool path when the appdata share lives on one pool). A path must be inside an existing share or pool directory under `/mnt`; the plugin never creates a share. A change takes effect the next time the array starts.
+:end
+
+_(Restore sessions after the array starts)_:
+: <?=ccu_select('RESTORE_SESSIONS', strtolower((string) ($ccu_cfg['RESTORE_SESSIONS'] ?? 'yes')))?>
+
+:ccu_restore_plug:
+Supervised sessions (`claude-unraid start <workspace>`) that were live when the array stopped are resumed in their workspace after `disks_mounted`. Plain `claude` sessions started by hand are never relaunched, but `claude --continue` works in the same directory.
+:end
+
+_(Maximum sessions to restore)_:
+: <input type="number" name="MAX_RESTORE" min="0" max="20" value="<?=ccu_h($ccu_cfg['MAX_RESTORE'] ?? '4')?>">
+
+_(Transcript retention (days))_:
+: <input type="number" name="CLEANUP_DAYS" min="1" max="3650" value="<?=ccu_h($ccu_cfg['CLEANUP_DAYS'] ?? '90')?>">
+
+:ccu_cleanup_plug:
+Claude Code deletes conversation transcripts older than this (`cleanupPeriodDays`). Minimum 1.
+:end
+
+_(Allow auto mode)_:
+: <?=ccu_select('ALLOW_AUTO_MODE', strtolower((string) ($ccu_cfg['ALLOW_AUTO_MODE'] ?? 'no')))?>
+
+:ccu_auto_plug:
+With *No*, Claude Code's classifier-driven auto mode is removed from the permission mode cycle and every command prompts (Manual mode). Bypass mode is always disabled; Claude Code refuses it as root anyway.
+:end
+
+_(Allow writable /boot sessions (`claude --boot-rw`))_:
+: <?=ccu_select('ALLOW_BOOT_RW', strtolower((string) ($ccu_cfg['ALLOW_BOOT_RW'] ?? 'no')))?>
+
+:ccu_bootrw_plug:
+Normally the flash drive is read-only inside every Claude Code session (a private mount namespace). With *Yes*, a session started as `claude --boot-rw` can write to `/boot`; it prints a warning and is logged.
+:end
+
+_(Allow Remote Control)_:
+: <?=ccu_select('REMOTE_CONTROL', strtolower((string) ($ccu_cfg['REMOTE_CONTROL'] ?? 'no')))?>
+
+:ccu_remote_plug:
+With *Yes*, `claude-unraid start <workspace> --remote-control` creates a session you can drive from claude.ai or the Claude app. Requires a claude.ai login. While connected, the transcript is stored on Anthropic's servers. With *No*, the managed policy disables Remote Control everywhere.
+:end
+
+_(Event handler timeout (seconds))_:
+: <input type="number" name="EVENT_TIMEOUT" min="5" max="120" value="<?=ccu_h($ccu_cfg['EVENT_TIMEOUT'] ?? '20')?>">
+
+:ccu_timeout_plug:
+Hard limit for the plugin's array event handlers (emhttpd waits for them). 20 seconds is plenty; raise it only if the syslog shows handlers being cut off.
+:end
+
+&nbsp;
+: <span class="inline-block"><input type="submit" value="_(Apply)_"><input type="button" value="_(Done)_" onclick="done()"></span>
+
+</form>
+
+<script>
+function ccuAction(action) {
+  $.post('/plugins/claude-code-unraid/include/exec.php', {action: action, csrf_token: csrf_token}, function(data) {
+    var text = '';
+    if (data && data.output) text = data.output.join('\n');
+    else if (data && data.lines) text = data.lines.join('\n');
+    swal({
+      title: action,
+      text: $('<div/>').text(text || (data && data.ok ? 'done' : 'failed')).html().replace(/\n/g, '<br>'),
+      type: data && data.ok ? 'success' : 'error',
+      html: true,
+      confirmButtonText: "_(Ok)_"
+    }, function() { location.reload(); });
+  }, 'json').fail(function(xhr) {
+    var msg = 'request failed';
+    try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+    swal({title: action, text: $('<div/>').text(msg).html(), type: 'error', html: true, confirmButtonText: "_(Ok)_"});
+  });
+}
+function ccuConfirmStop() {
+  swal({
+    title: "_(Stop all supervised sessions)_?",
+    text: "_(Each session gets /exit, then SIGTERM, then SIGKILL after 10 seconds)_.",
+    type: 'warning', showCancelButton: true, confirmButtonText: "_(Stop)_", cancelButtonText: "_(Cancel)_"
+  }, function(ok) { if (ok) ccuAction('stop-all'); });
+}
+</script>

@@ -18,8 +18,12 @@ PLG_TEMPLATE := plugin/$(PLUGIN).plg.in
 check: lint test
 	@echo "check: ok"
 
-lint: lint-shell lint-php lint-plg lint-workflows
+lint: lint-shell lint-php lint-plg lint-workflows lint-escaping
 	@echo "lint: ok"
+
+# No .page or PHP file may print a variable into HTML without escaping it.
+lint-escaping:
+	./scripts/lint-escaping --allow scripts/lint-escaping.allow src tests scripts
 
 lint-shell:
 	@echo "shellcheck ($(words $(SH_FILES)) files)"
@@ -28,9 +32,14 @@ lint-shell:
 	@echo "shfmt -i 2 -ci -d"
 	shfmt -i 2 -ci -d $(SH_FILES)
 
+PHP_SHEBANG_FILES := $(shell grep -rl --include='*' -m1 '^\#!/usr/bin/env php' src scripts 2>/dev/null | sort)
+PAGE_FILES := $(shell find src -name '*.page' | sort)
+
 lint-php:
-	@echo "php -l ($(words $(PHP_FILES)) files)"
-	@for f in $(PHP_FILES); do php -l "$$f" > /dev/null || exit 1; done
+	@echo "php -l ($(words $(PHP_FILES)) .php files, $(words $(PHP_SHEBANG_FILES)) PHP scripts, $(words $(PAGE_FILES)) pages)"
+	@for f in $(PHP_FILES) $(PHP_SHEBANG_FILES); do php -l "$$f" > /dev/null || exit 1; done
+	@mkdir -p .tmp/pages
+	@for f in $(PAGE_FILES); do sed '1,/^---$$/d' "$$f" > ".tmp/pages/$$(basename "$$f").php" && php -l ".tmp/pages/$$(basename "$$f").php" > /dev/null || exit 1; done
 
 # Render the template with dev values, then check it with xmllint (entity
 # expansion) and our own rules.

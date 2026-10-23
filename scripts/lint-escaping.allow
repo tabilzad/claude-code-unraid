@@ -1,0 +1,15 @@
+# Justified exceptions for scripts/lint-escaping, one per line: path-suffix:regex
+# (the regex is matched against the printed expression).
+#
+# CLI tools that print to a terminal, not into HTML:
+scripts/claude-release-manifest.php:.*
+scripts/lint-plg:.*
+scripts/lint-escaping:.*
+scripts/kv2json:.*
+scripts/registry:.*
+scripts/render-policy:.*
+scripts/json-object-check:.*
+policy/guard:.*
+policy/audit:.*
+include/exec.php:^json_encode
+tests/:.*
