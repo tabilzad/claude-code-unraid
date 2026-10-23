@@ -69,9 +69,13 @@ PHP
 printf '#!/bin/bash\necho "notify $*" >> /tmp/e2e/notify.log\n' >/usr/local/emhttp/webGui/scripts/notify
 chmod 0755 /usr/local/emhttp/webGui/scripts/notify
 install -m 0755 "$REPO/tests/vendor/unraid/plugin" /usr/local/sbin/plugin
-# Any attempt to download fails loudly: these scenarios must not need the network.
+# Any attempt to download fails loudly: these scenarios must not need the
+# network. wget is what the plugin manager uses for the package; curl is what
+# install-binary and install-tmux use, so the binary never arrives here and the
+# install has to degrade gracefully (the emulated host covers the success path).
 printf '#!/bin/bash\necho "wget called: $*" >> /tmp/e2e/wget.log\nexit 4\n' >"$E2E/bin/wget"
-chmod 0755 "$E2E/bin/wget"
+printf '#!/bin/bash\necho "curl called: $*" >> /tmp/e2e/curl.log\nexit 6\n' >"$E2E/bin/curl"
+chmod 0755 "$E2E/bin/wget" "$E2E/bin/curl"
 export PATH="$E2E/bin:$PATH"
 # logger has no syslog here; keep it quiet.
 printf '#!/bin/bash\nexit 0\n' >"$E2E/bin/logger"
@@ -95,8 +99,15 @@ assert "plg registered in /var/log/plugins" test -L "/var/log/plugins/$PLUGIN.pl
 assert "plg copied to /boot/config/plugins" test -f "/boot/config/plugins/$PLUGIN.plg"
 assert "package installed" test "$(installed_pkg)" = 1
 assert "package scripts present and executable" test -x "/usr/local/emhttp/plugins/$PLUGIN/scripts/install-binary"
-assert "install steps ran" grep -q "install-binary: not implemented yet" "$E2E/install-A.log"
-assert_not "nothing was downloaded" test -e "$E2E/wget.log"
+assert "install steps ran: the binary download was attempted (curl) and refused by the stub" test -e "$E2E/curl.log"
+assert "degraded gracefully: the summary says the binary is not available" grep -q "Claude Code NOT available" "$E2E/install-A.log"
+assert "degraded gracefully: tmux reported as not available" grep -q "tmux NOT available" "$E2E/install-A.log"
+assert "an alert was raised for the missing binary" grep -q "Claude Code binary unavailable" "$E2E/notify.log"
+assert "binary.state records the error" grep -q "^error=." "/run/$PLUGIN/binary.state"
+assert "launcher and helper installed anyway" test -x /usr/local/bin/claude -a -x /usr/local/bin/claude-unraid
+assert "managed policy baseline written" test -f "/etc/claude-code/managed-settings.d/99-$PLUGIN-baseline.json"
+assert_not "plg not in plugins-error despite the failed downloads" test -e "/boot/config/plugins-error/$PLUGIN.plg"
+assert_not "the plugin manager itself downloaded nothing" test -e "$E2E/wget.log"
 assert "cached package untouched" cmp -s "$txz" "/boot/config/plugins/$PLUGIN/pkg/$txz_name"
 
 step "B: reboot with a valid cache"
@@ -126,7 +137,9 @@ assert "recovered after the cache was fixed" test -L "/var/log/plugins/$PLUGIN.p
 
 step "D: remove"
 plugin remove "$PLUGIN.plg" | tee "$E2E/remove.log"
-assert "remove step ran" grep -q "remove: not implemented yet" "$E2E/remove.log"
+assert "remove step ran and listed what it kept" grep -q "To remove everything" "$E2E/remove.log"
+assert_not "launcher removed" test -e /usr/local/bin/claude
+assert_not "policy baseline removed" test -e "/etc/claude-code/managed-settings.d/99-$PLUGIN-baseline.json"
 assert "plg moved to plugins-removed" test -f "/boot/config/plugins-removed/$PLUGIN.plg"
 assert_not "plg unregistered" test -e "/var/log/plugins/$PLUGIN.plg"
 assert "cfg kept on flash" test -f "/boot/config/plugins/$PLUGIN/$PLUGIN.cfg"
