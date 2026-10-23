@@ -1,0 +1,113 @@
+name: Claude Code bump
+
+# Once a day, compare the "stable" channel of Anthropic's release bucket with
+# release/claude-code.lock. When a newer version exists, verify its signed
+# manifest and the binary, update the lock and open a pull request. Nothing is
+# ever pushed to main: a human reviews and merges, and the merge is what later
+# produces a plugin release.
+#
+# Note: pull requests opened with the default GITHUB_TOKEN do not trigger other
+# workflows, so CI runs on the PR only after it is pushed to again or when a
+# repository secret BUMP_TOKEN (a fine-grained PAT with contents and
+# pull-requests write) is configured.
+
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: check stable channel and open a PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.BUMP_TOKEN || github.token }}
+
+      - name: Resolve the stable channel
+        id: candidate
+        run: |
+          set -euo pipefail
+          current="$(./scripts/dev-env scripts/claude-release current)"
+          candidate="$(./scripts/dev-env scripts/claude-release bump-candidate --channel stable)"
+          {
+            echo "current=$current"
+            echo "candidate=$candidate"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$candidate" ]; then
+            echo "lock is at $current; stable has nothing newer"
+          else
+            echo "stable is $candidate, lock is $current"
+          fi
+
+      - name: Verify and lock the new version (downloads and hashes the binary)
+        if: steps.candidate.outputs.candidate != ''
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.candidate }}
+        run: |
+          set -euo pipefail
+          ./scripts/dev-env scripts/claude-release lock --version "$CANDIDATE" --download 2>&1 | tee verify-output.txt
+          git --no-pager diff -- release/claude-code.lock
+
+      - name: Open or update the pull request
+        if: steps.candidate.outputs.candidate != ''
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_TOKEN || github.token }}
+          CURRENT: ${{ steps.candidate.outputs.current }}
+          CANDIDATE: ${{ steps.candidate.outputs.candidate }}
+        run: |
+          set -euo pipefail
+          branch="claude-bump/${CANDIDATE}"
+          title="claude-code: ${CURRENT} → ${CANDIDATE}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add release/claude-code.lock
+          if git diff --cached --quiet; then
+            echo "lock unchanged; nothing to propose"
+            exit 0
+          fi
+          git commit -m "$title" -m "Pinned from the GPG-signed manifest of ${CANDIDATE}; the binary was downloaded and its sha256 and size matched."
+          git push --force-with-lease origin "$branch"
+
+          body="$(mktemp)"
+          {
+            echo "Pins Claude Code **${CANDIDATE}** (stable channel), replacing ${CURRENT}."
+            echo
+            echo "Verification performed by this workflow (\`scripts/claude-release lock --download\`):"
+            echo
+            echo '```'
+            sed -n '/^CLAUDE_\|^MANIFEST_\|^VERIFIED_AT/p' release/claude-code.lock
+            echo '```'
+            echo
+            echo "<details><summary>Full verification output</summary>"
+            echo
+            echo '```'
+            sed -e 's/\x1b\[[0-9;]*m//g' verify-output.txt
+            echo '```'
+            echo "</details>"
+            echo
+            echo "Merging this PR does not publish anything by itself; a maintainer tags the next plugin release."
+          } > "$body"
+
+          existing="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body-file "$body"
+          else
+            gh pr create --base main --head "$branch" --title "$title" --body-file "$body" --label "claude-code-bump" || \
+            gh pr create --base main --head "$branch" --title "$title" --body-file "$body"
+          fi

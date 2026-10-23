@@ -9,6 +9,7 @@
 /plugin/*.plg
 
 # local tooling
+/tests/.tmp/
 /.dev-env.id
 /.cache/
 *.log

@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+# claude-release: turn "the current stable Claude Code" into a cryptographically
+# verified version lock. Runs in CI or the dev-env, never on an Unraid box.
+#
+#   claude-release resolve --channel stable|latest
+#       Print the version the channel points at.
+#   claude-release verify --version X [--download]
+#       Download manifest.json and manifest.json.sig for X, verify the signature
+#       against keys/claude-code.asc (fingerprint pinned below), and print the
+#       lock fields as KEY=value lines. --download also fetches the binary and
+#       checks its sha256 and size.
+#   claude-release lock --version X [--download] [--out FILE]
+#       verify, then write release/claude-code.lock atomically.
+#   claude-release current [--lock FILE]
+#       Print the version pinned in the lock file.
+#   claude-release bump-candidate --channel stable [--lock FILE]
+#       Print the channel's version when it is newer than the lock, else nothing.
+#
+# Test mode (CLAUDE_RELEASE_TEST_MODE=1) additionally honours:
+#   CLAUDE_RELEASE_BASE_URL     file:///... or http://127.0.0.1... fixture bucket
+#   CLAUDE_RELEASE_KEY_FILE     a key file that must live under tests/
+#   CLAUDE_RELEASE_FINGERPRINT  the fingerprint that key must have
+# Outside test mode those variables are an error, so CI cannot be pointed at an
+# unverified key by accident.
+set -euo pipefail
+
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+readonly REPO_ROOT
+
+# Anthropic's "Claude Code Release Signing" key, served at
+# https://downloads.claude.ai/keys/claude-code.asc. Changing this constant is a
+# reviewed code change, never a runtime option.
+PINNED_FINGERPRINT=31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
+DEFAULT_BASE_URL=https://downloads.claude.ai/claude-code-releases
+PLATFORM=linux-x64
+KEY_FILE="$REPO_ROOT/keys/claude-code.asc"
+LOCK_FILE="$REPO_ROOT/release/claude-code.lock"
+MANIFEST_HELPER="$REPO_ROOT/scripts/claude-release-manifest.php"
+readonly DEFAULT_BASE_URL PLATFORM MANIFEST_HELPER
+
+log() { printf 'claude-release: %s\n' "$*" >&2; }
+die() {
+  log "error: $*"
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Environment overrides (test mode only)
+# ---------------------------------------------------------------------------
+test_mode=0
+[ "${CLAUDE_RELEASE_TEST_MODE:-0}" = 1 ] && test_mode=1
+
+base_url=$DEFAULT_BASE_URL
+curl_proto='=https'
+if [ -n "${CLAUDE_RELEASE_BASE_URL:-}" ]; then
+  [ "$test_mode" = 1 ] || die "CLAUDE_RELEASE_BASE_URL is only honoured with CLAUDE_RELEASE_TEST_MODE=1"
+  case "$CLAUDE_RELEASE_BASE_URL" in
+    file:///*) curl_proto='=file' ;;
+    http://127.0.0.1:* | http://127.0.0.1/*) curl_proto='=http' ;;
+    *) die "test base URL must start with file:/// or http://127.0.0.1" ;;
+  esac
+  base_url=${CLAUDE_RELEASE_BASE_URL%/}
+fi
+
+if [ -n "${CLAUDE_RELEASE_KEY_FILE:-}" ]; then
+  [ "$test_mode" = 1 ] || die "CLAUDE_RELEASE_KEY_FILE is only honoured with CLAUDE_RELEASE_TEST_MODE=1"
+  key_real=$(realpath -e -- "$CLAUDE_RELEASE_KEY_FILE" 2>/dev/null) || die "CLAUDE_RELEASE_KEY_FILE does not exist"
+  tests_real=$(realpath -e -- "$REPO_ROOT/tests")
+  case "$key_real" in
+    "$tests_real"/*) KEY_FILE=$key_real ;;
+    *) die "CLAUDE_RELEASE_KEY_FILE must be under $tests_real" ;;
+  esac
+fi
+
+if [ -n "${CLAUDE_RELEASE_FINGERPRINT:-}" ]; then
+  [ "$test_mode" = 1 ] || die "CLAUDE_RELEASE_FINGERPRINT is only honoured with CLAUDE_RELEASE_TEST_MODE=1"
+  [[ "$CLAUDE_RELEASE_FINGERPRINT" =~ ^[A-F0-9]{40}$ ]] || die "CLAUDE_RELEASE_FINGERPRINT must be 40 upper-case hex characters"
+  PINNED_FINGERPRINT=$CLAUDE_RELEASE_FINGERPRINT
+fi
+readonly PINNED_FINGERPRINT KEY_FILE base_url curl_proto
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+work_dir=""
+gnupg_home=""
+cleanup() {
+  if [ -n "$gnupg_home" ]; then
+    gpgconf --homedir "$gnupg_home" --kill gpg-agent >/dev/null 2>&1 || true
+  fi
+  [ -n "$work_dir" ] && rm -rf -- "$work_dir"
+  return 0
+}
+trap cleanup EXIT
+
+need_work_dir() {
+  if [ -z "$work_dir" ]; then
+    work_dir=$(mktemp -d "${TMPDIR:-/tmp}/claude-release.XXXXXXXX")
+  fi
+}
+
+validate_version() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a release version: '$1' (expected MAJOR.MINOR.PATCH)"
+}
+
+# fetch URL OUT MAX_TIME
+fetch() {
+  local url=$1 out=$2 max_time=${3:-60}
+  log "fetching $url"
+  curl --fail --silent --show-error --location --max-redirs 3 \
+    --proto "$curl_proto" --tlsv1.2 \
+    --retry 3 --retry-delay 2 --connect-timeout 15 --max-time "$max_time" \
+    --output "$out" -- "$url" || die "download failed: $url"
+  [ -s "$out" ] || die "download is empty: $url"
+}
+
+sha256_of() { sha256sum -- "$1" | cut -d' ' -f1; }
+
+# import_key: create an isolated GNUPGHOME, import KEY_FILE, and require that
+# it holds exactly one primary key whose fingerprint is the pinned one.
+import_key() {
+  need_work_dir
+  gnupg_home="$work_dir/gnupg"
+  mkdir -m 0700 -- "$gnupg_home"
+  [ -r "$KEY_FILE" ] || die "key file not readable: $KEY_FILE"
+  gpg --homedir "$gnupg_home" --batch --quiet --no-tty --import -- "$KEY_FILE" 2>/dev/null ||
+    die "could not import $KEY_FILE"
+
+  local primaries=() expect_primary=0 line
+  while IFS= read -r line; do
+    case "$line" in
+      pub:*) expect_primary=1 ;;
+      fpr:*)
+        if [ "$expect_primary" = 1 ]; then
+          primaries+=("$(printf '%s' "$line" | cut -d: -f10)")
+          expect_primary=0
+        fi
+        ;;
+    esac
+  done < <(gpg --homedir "$gnupg_home" --batch --no-tty --with-colons --list-keys 2>/dev/null)
+
+  [ "${#primaries[@]}" -eq 1 ] || die "key file must contain exactly one primary key (found ${#primaries[@]})"
+  [ "${primaries[0]}" = "$PINNED_FINGERPRINT" ] ||
+    die "key fingerprint ${primaries[0]} does not match the pinned fingerprint $PINNED_FINGERPRINT"
+}
+
+# verify_signature SIG FILE: require a VALIDSIG status line whose primary-key
+# fingerprint is the pinned one. Exit code 0 from gpg is not enough on its own.
+verify_signature() {
+  local sig=$1 file=$2 status valid=0 line
+  status=$(gpg --homedir "$gnupg_home" --batch --no-tty --status-fd 1 \
+    --verify -- "$sig" "$file" 2>/dev/null) || true
+  while IFS= read -r line; do
+    case "$line" in
+      "[GNUPG:] BADSIG "* | "[GNUPG:] ERRSIG "* | "[GNUPG:] EXPKEYSIG "* | "[GNUPG:] REVKEYSIG "* | "[GNUPG:] EXPSIG "*)
+        die "signature rejected: ${line#\[GNUPG:\] }"
+        ;;
+      "[GNUPG:] VALIDSIG "*)
+        # VALIDSIG <sig-key-fpr> <date> <ts> <expire> <ver> <res> <pkalgo> <hashalgo> <class> <primary-fpr>
+        local fields primary
+        read -r -a fields <<<"${line#\[GNUPG:\] VALIDSIG }"
+        primary=${fields[$((${#fields[@]} - 1))]}
+        if [ "$primary" = "$PINNED_FINGERPRINT" ]; then
+          valid=1
+        else
+          die "signature made by an unexpected key: $primary"
+        fi
+        ;;
+    esac
+  done <<<"$status"
+  [ "$valid" = 1 ] || die "no valid signature found (gpg reported no VALIDSIG)"
+}
+
+# read_lock_value KEY [FILE]
+read_lock_value() {
+  local key=$1 file=${2:-$LOCK_FILE} value
+  [ -r "$file" ] || die "lock file not readable: $file"
+  value=$(sed -n "s/^${key}=//p" -- "$file" | head -n1)
+  [ -n "$value" ] || die "$key missing from $file"
+  printf '%s\n' "$value"
+}
+
+# version_gt A B: true when A is a newer MAJOR.MINOR.PATCH than B
+version_gt() {
+  local IFS=.
+  # shellcheck disable=SC2206 # splitting on '.' is the point
+  local a=($1) b=($2)
+  local i
+  for i in 0 1 2; do
+    if ((10#${a[i]} > 10#${b[i]})); then return 0; fi
+    if ((10#${a[i]} < 10#${b[i]})); then return 1; fi
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+cmd_resolve() {
+  local channel=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --channel)
+        channel=${2:-}
+        shift 2
+        ;;
+      *) die "resolve: unknown argument '$1'" ;;
+    esac
+  done
+  case "$channel" in
+    stable | latest) ;;
+    *) die "resolve: --channel must be stable or latest" ;;
+  esac
+  need_work_dir
+  fetch "$base_url/$channel" "$work_dir/channel" 30
+  local version
+  version=$(tr -d '[:space:]' <"$work_dir/channel")
+  validate_version "$version"
+  printf '%s\n' "$version"
+}
+
+# do_verify VERSION DOWNLOAD(0|1): prints the lock fields on stdout
+do_verify() {
+  local version=$1 download=$2
+  validate_version "$version"
+  need_work_dir
+  local manifest="$work_dir/manifest.json" sig="$work_dir/manifest.json.sig"
+  fetch "$base_url/$version/manifest.json" "$manifest" 60
+  fetch "$base_url/$version/manifest.json.sig" "$sig" 60
+
+  import_key
+  verify_signature "$sig" "$manifest"
+  log "signature OK (primary key $PINNED_FINGERPRINT)"
+
+  # Only read the manifest after the signature passed.
+  local fields checksum size manifest_version
+  fields=$(php -d display_errors=stderr "$MANIFEST_HELPER" "$manifest" "$PLATFORM" "$version") ||
+    die "manifest rejected"
+  checksum=$(printf '%s\n' "$fields" | sed -n 's/^CHECKSUM=//p')
+  size=$(printf '%s\n' "$fields" | sed -n 's/^SIZE=//p')
+  manifest_version=$(printf '%s\n' "$fields" | sed -n 's/^MANIFEST_VERSION=//p')
+  [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || die "manifest checksum is malformed"
+  [ "$manifest_version" = "$version" ] || die "manifest is for $manifest_version, not $version"
+
+  local url="$base_url/$version/$PLATFORM/claude"
+  if [ "$download" = 1 ]; then
+    local bin="$work_dir/claude" actual
+    fetch "$url" "$bin" 1800
+    actual=$(sha256_of "$bin")
+    [ "$actual" = "$checksum" ] || die "binary sha256 mismatch: manifest $checksum, downloaded $actual"
+    if [ -n "$size" ]; then
+      local bytes
+      bytes=$(stat -c %s -- "$bin")
+      [ "$bytes" = "$size" ] || die "binary size mismatch: manifest $size, downloaded $bytes"
+    fi
+    log "binary OK ($actual, $(stat -c %s -- "$bin") bytes)"
+  fi
+
+  printf 'CLAUDE_VERSION=%s\n' "$version"
+  printf 'CLAUDE_PLATFORM=%s\n' "$PLATFORM"
+  printf 'CLAUDE_SHA256=%s\n' "$checksum"
+  printf 'CLAUDE_URL=%s\n' "$url"
+  printf 'CLAUDE_SIZE=%s\n' "$size"
+  printf 'MANIFEST_SHA256=%s\n' "$(sha256_of "$manifest")"
+  printf 'VERIFIED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
+parse_verify_args() {
+  version=""
+  download=0
+  out=$LOCK_FILE
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --version)
+        version=${2:-}
+        shift 2
+        ;;
+      --download)
+        download=1
+        shift
+        ;;
+      --out)
+        out=${2:-}
+        shift 2
+        ;;
+      *) die "unknown argument '$1'" ;;
+    esac
+  done
+  [ -n "$version" ] || die "--version is required"
+}
+
+cmd_verify() {
+  local version download out
+  parse_verify_args "$@"
+  do_verify "$version" "$download"
+}
+
+cmd_lock() {
+  local version download out fields tmp
+  parse_verify_args "$@"
+  fields=$(do_verify "$version" "$download")
+  mkdir -p -- "$(dirname -- "$out")"
+  tmp=$(mktemp -- "$(dirname -- "$out")/.lock.XXXXXXXX")
+  {
+    printf '# Claude Code release pinned for the plugin. Generated by scripts/claude-release;\n'
+    printf '# edit through "scripts/claude-release lock", not by hand.\n'
+    printf '%s\n' "$fields"
+  } >"$tmp"
+  mv -f -- "$tmp" "$out"
+  log "wrote $out"
+  printf '%s\n' "$fields"
+}
+
+cmd_current() {
+  local lock=$LOCK_FILE
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --lock)
+        lock=${2:-}
+        shift 2
+        ;;
+      *) die "current: unknown argument '$1'" ;;
+    esac
+  done
+  read_lock_value CLAUDE_VERSION "$lock"
+}
+
+cmd_bump_candidate() {
+  local channel="" lock=$LOCK_FILE
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --channel)
+        channel=${2:-}
+        shift 2
+        ;;
+      --lock)
+        lock=${2:-}
+        shift 2
+        ;;
+      *) die "bump-candidate: unknown argument '$1'" ;;
+    esac
+  done
+  local current candidate
+  current=$(read_lock_value CLAUDE_VERSION "$lock")
+  validate_version "$current"
+  candidate=$(cmd_resolve --channel "$channel")
+  if version_gt "$candidate" "$current"; then
+    log "$channel is $candidate, lock is $current: bump available"
+    printf '%s\n' "$candidate"
+  else
+    log "$channel is $candidate, lock is $current: nothing to do"
+  fi
+}
+
+usage() {
+  sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p}' "$0"
+}
+
+main() {
+  [ $# -ge 1 ] || {
+    usage >&2
+    exit 1
+  }
+  local cmd=$1
+  shift
+  case "$cmd" in
+    resolve) cmd_resolve "$@" ;;
+    verify) cmd_verify "$@" ;;
+    lock) cmd_lock "$@" ;;
+    current) cmd_current "$@" ;;
+    bump-candidate) cmd_bump_candidate "$@" ;;
+    -h | --help | help) usage ;;
+    *) die "unknown command '$cmd'" ;;
+  esac
+}
+
+main "$@"
