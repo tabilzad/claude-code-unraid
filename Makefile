@@ -13,12 +13,12 @@ SH_FILES    := $(shell ./scripts/list-shell-files)
 PHP_FILES   := $(shell find src scripts tests -name '*.php' -not -path 'tests/vendor/*' | sort)
 PLG_TEMPLATE := plugin/$(PLUGIN).plg.in
 
-.PHONY: check lint test build fmt lint-shell lint-php lint-plg lint-workflows lint-escaping test-bats test-php list-shell-files e2e-install e2e
+.PHONY: check lint test build fmt lint-shell lint-php lint-plg lint-ca lint-workflows lint-escaping test-bats test-php list-shell-files e2e-install e2e
 
 check: lint test
 	@echo "check: ok"
 
-lint: lint-shell lint-php lint-plg lint-workflows lint-escaping
+lint: lint-shell lint-php lint-plg lint-ca lint-workflows lint-escaping
 	@echo "lint: ok"
 
 # No .page or PHP file may print a variable into HTML without escaping it.
@@ -52,6 +52,10 @@ lint-plg:
 	  --out .tmp/lint/$(PLUGIN).plg > /dev/null
 	xmllint --noent --noout .tmp/lint/$(PLUGIN).plg
 	./scripts/lint-plg .tmp/lint/$(PLUGIN).plg
+
+# The Community Applications files must agree with the rendered plg.
+lint-ca: lint-plg
+	./scripts/lint-ca --plg .tmp/lint/$(PLUGIN).plg
 
 lint-workflows:
 	@if command -v actionlint > /dev/null 2>&1; then echo "actionlint"; actionlint; else echo "lint-workflows: actionlint not installed, skipped"; fi

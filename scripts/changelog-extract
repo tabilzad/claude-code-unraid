@@ -2,7 +2,8 @@
 # changelog-extract: print sections of CHANGELOG.md (Keep a Changelog format).
 #
 #   changelog-extract --latest N [--file CHANGELOG.md]
-#       The first N "## [...]" sections, headings included.
+#       The first N "## [...]" sections that have any content, headings
+#       included. An empty section (a fresh "[Unreleased]") is skipped.
 #   changelog-extract --version X [--file CHANGELOG.md]
 #       The body of the "## [X]" section (heading excluded). Exit 1 if absent.
 #   changelog-extract --unreleased-as X
@@ -48,8 +49,13 @@ case "$mode" in
   latest)
     [[ "$arg" =~ ^[1-9][0-9]*$ ]] || die "--latest needs a positive number"
     awk -v n="$arg" '
-      /^## \[/ { count++ }
-      count > 0 && count <= n { print }
+      function flush() {
+        if (has_text && printed < n) { printf "%s", buf; printed++ }
+        buf = ""; has_text = 0
+      }
+      /^## \[/ { if (started) flush(); started = 1; buf = $0 ORS; next }
+      started { buf = buf $0 ORS; if ($0 ~ /[^[:space:]]/) has_text = 1 }
+      END { if (started) flush() }
     ' "$file"
     ;;
   version)

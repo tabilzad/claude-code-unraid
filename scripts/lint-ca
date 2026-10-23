@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# lint-ca: check the Community Applications files against the rendered plg.
+#
+#   lint-ca --plg RENDERED.plg [--wrapper ca/claude-code-unraid.xml]
+#           [--profile ca_profile.xml] [--icon ca/claude-code-unraid.png]
+#
+# Checks: both XML files are well formed; the wrapper's PluginURL, MinVer and
+# Support are identical to the plg's pluginURL, min and support attributes
+# (CA requires the first and takes the other two from the plg, so a difference
+# would only mislead); Beta is true or false; every category is one CA knows;
+# the Icon URL names the repository icon, which must be a real PNG; the
+# profile's Icon, when present, is the same; no starter placeholders remain.
+set -euo pipefail
+
+die() {
+  printf 'lint-ca: %s\n' "$*" >&2
+  exit 1
+}
+
+# The category names Community Applications accepts (its feed, 2026-10-23).
+KNOWN_CATEGORIES=" AI: Backup: Cloud: Crypto: Downloaders: Drivers: GameServers: HomeAutomation:
+ MediaApp: MediaApp:Books MediaApp:Music MediaApp:Photos MediaApp:Video MediaApp:Other
+ MediaServer: MediaServer:Books MediaServer:Music MediaServer:Photos MediaServer:Video MediaServer:Other
+ Network: Network:DNS Network:FTP Network:Management Network:Messenger Network:Proxy Network:Voip
+ Network:VPN Network:Privacy Network:Web Network:Other
+ Plugins: Productivity: Security: Tools: Tools:System Tools:Utilities Other: "
+
+REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+plg=""
+wrapper="$REPO_ROOT/ca/claude-code-unraid.xml"
+profile="$REPO_ROOT/ca_profile.xml"
+icon="$REPO_ROOT/ca/claude-code-unraid.png"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --plg)
+      plg=${2:-}
+      shift 2
+      ;;
+    --wrapper)
+      wrapper=${2:-}
+      shift 2
+      ;;
+    --profile)
+      profile=${2:-}
+      shift 2
+      ;;
+    --icon)
+      icon=${2:-}
+      shift 2
+      ;;
+    *) die "unknown argument '$1'" ;;
+  esac
+done
+[ -n "$plg" ] || die "--plg is required"
+for f in "$plg" "$wrapper" "$profile" "$icon"; do
+  [ -r "$f" ] || die "cannot read $f"
+done
+
+xmllint --noout "$wrapper" 2>/dev/null || die "$wrapper is not well-formed XML"
+xmllint --noout "$profile" 2>/dev/null || die "$profile is not well-formed XML"
+
+# xp FILE XPATH: the string value of an XPath expression, trimmed.
+xp() {
+  { xmllint --noent --xpath "$2" "$1" 2>/dev/null || true; } | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\n'
+}
+
+plg_url=$(xp "$plg" 'string(/PLUGIN/@pluginURL)')
+[ -n "$plg_url" ] || die "the plg has no pluginURL attribute"
+ca_url=$(xp "$wrapper" 'normalize-space(/Plugin/PluginURL)')
+[ "$ca_url" = "$plg_url" ] || die "PluginURL mismatch: wrapper '$ca_url', plg '$plg_url'"
+
+plg_min=$(xp "$plg" 'string(/PLUGIN/@min)')
+ca_min=$(xp "$wrapper" 'normalize-space(/Plugin/MinVer)')
+[ "$ca_min" = "$plg_min" ] || die "MinVer mismatch: wrapper '$ca_min', plg min '$plg_min'"
+
+plg_support=$(xp "$plg" 'string(/PLUGIN/@support)')
+ca_support=$(xp "$wrapper" 'normalize-space(/Plugin/Support)')
+[ "$ca_support" = "$plg_support" ] || die "Support mismatch: wrapper '$ca_support', plg support '$plg_support'"
+
+beta=$(xp "$wrapper" 'normalize-space(/Plugin/Beta)')
+case "$beta" in
+  true | false) ;;
+  *) die "Beta must be true or false, got '$beta'" ;;
+esac
+
+for el in Name Overview Category Icon License Project PluginAuthor; do
+  [ -n "$(xp "$wrapper" "normalize-space(/Plugin/$el)")" ] || die "wrapper: <$el> is empty or missing"
+done
+
+for cat in $(xp "$wrapper" 'normalize-space(/Plugin/Category)'); do
+  case "$KNOWN_CATEGORIES" in
+    *" $cat "*) ;;
+    *) die "unknown category '$cat' (see KNOWN_CATEGORIES in $0)" ;;
+  esac
+done
+
+icon_url=$(xp "$wrapper" 'normalize-space(/Plugin/Icon)')
+case "$icon_url" in
+  https://*) ;;
+  *) die "Icon must be an https URL, got '$icon_url'" ;;
+esac
+[ "${icon_url##*/}" = "$(basename -- "$icon")" ] || die "Icon URL '$icon_url' does not name $(basename -- "$icon")"
+sig=$(head -c 8 -- "$icon" | od -An -tx1 | tr -d ' \n')
+[ "$sig" = "89504e470d0a1a0a" ] || die "$icon is not a PNG file"
+
+[ -n "$(xp "$profile" 'normalize-space(/CommunityApplications/Profile)')" ] || die "profile: <Profile> is empty or missing"
+profile_icon=$(xp "$profile" 'normalize-space(/CommunityApplications/Icon)')
+[ -z "$profile_icon" ] || [ "$profile_icon" = "$icon_url" ] || die "profile Icon '$profile_icon' differs from the wrapper Icon"
+
+if grep -q -E 'YOUR_|example\.com|TODO|FIXME' "$wrapper" "$profile"; then
+  die "placeholder text left in the CA files"
+fi
+
+printf 'lint-ca: ok (%s)\n' "$plg_url"

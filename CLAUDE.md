@@ -69,11 +69,11 @@ plugin/slack-desc        # Slackware package description packed into the txz
 release/claude-code.lock # pinned Claude Code version + verified sha256 (CI-owned)
 release/tmux.lock        # pinned Slackware tmux package (hand-verified, see SPIKE)
 keys/                    # Anthropic release signing key (fingerprint pinned in code)
-scripts/                 # build-txz, render-plg, lint-plg, plugin-version, claude-release, dev-env
+scripts/                 # build-txz, render-plg, lint-plg, lint-ca, plugin-version, claude-release, dev-env, make-icon.py
 tests/bats, tests/php    # unit tests; tests/helpers/ fixtures; tests/fixtures/ golden files
 tests/e2e/               # plugin-manager and emulated-host scenarios (run as root in dev-env)
 tests/vendor/unraid/     # Lime's plugin manager script, test-only (GPLv2)
-ca/                      # CA plugin template XML, ca_profile.xml
+ca/                      # CA plugin wrapper XML, icon, README; ca_profile.xml sits at the repo root (CA requires it there)
 docs/                    # SPEC, SPIKE, SECURITY, TESTING, RELEASING, user docs
 ```
 

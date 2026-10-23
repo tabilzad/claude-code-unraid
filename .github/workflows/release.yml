@@ -5,9 +5,14 @@ name: Release
 # release and compares it with the sha256 rendered into the plg, so the files
 # attached here are the only place the plugin ever installs from.
 #
-# Tags that contain a "-" (v0.1.0-beta.1) become pre-releases, which the
-# "releases/latest/download" pluginURL skips; beta users install from the
-# tag's own URL.
+# Every tag is published as a full release, never a pre-release: the plg's
+# pluginURL (and the Community Applications PluginURL, which must be identical)
+# is "releases/latest/download/claude-code-unraid.plg", and GitHub resolves
+# "latest" only to full releases. Beta status is carried by the version itself
+# (v0.1.0-beta.1) and by the Beta flag in the CA entry. To publish a build for
+# testers only, mark the release as a pre-release afterwards
+# (gh release edit TAG --prerelease): installed copies then keep seeing the
+# previous full release as "latest".
 
 on:
   push:
@@ -78,9 +83,5 @@ jobs:
           VERSION: ${{ steps.build.outputs.version }}
         run: |
           set -euo pipefail
-          prerelease=()
-          case "$TAG" in
-            *-*) prerelease=(--prerelease) ;;
-          esac
-          gh release create "$TAG" --verify-tag --title "$TAG (plugin $VERSION)" --notes-file dist/notes.md "${prerelease[@]}" \
+          gh release create "$TAG" --verify-tag --title "$TAG (plugin $VERSION)" --notes-file dist/notes.md \
             dist/claude-code-unraid.plg dist/*.txz dist/SHA256SUMS

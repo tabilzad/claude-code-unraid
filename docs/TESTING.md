@@ -53,7 +53,10 @@ with `TXZ_URL=http://<ws>:8000/<package>.txz` passed to `make build`).
    and a notification appears. Reboot or reinstall to repair.
 3. **Read-only flash.** In `claude`, ask it to run `touch /boot/probe`. Expected: the
    command fails with "Read-only file system" and `/boot/probe` does not exist
-   afterwards. From a normal shell `touch /boot/probe` works (delete it). Also record
+   afterwards. From a normal shell `touch /boot/probe` works (delete it). Then ask it to
+   run `echo x > /proc/1/root/boot/probe`: the guard must raise an ask prompt that names
+   `/proc/<pid>/root`; decline it (approved, the write would land on the flash drive: the
+   gateway is guarded, not closed, see docs/SECURITY.md). Also record
    `findmnt -o TARGET,PROPAGATION /boot /mnt` for docs/SPIKE.md.
 4. **`--boot-rw`.** `claude --boot-rw` is refused (exit 80). Enable "Allow writable
    /boot sessions" on the plugin page, run `claude --boot-rw`: a warning is printed, the
@@ -128,4 +131,13 @@ with `TXZ_URL=http://<ws>:8000/<package>.txz` passed to `make build`).
     and one on a btrfs/XFS pool if you have both; record the data directory the plugin
     picked (`claude-unraid status`).
 
-Results go into `docs/SPIKE.md` (sections marked ON-BOX) and into the release notes.
+Record the run in the table below (one row per release and box), put the captured
+values into `docs/SPIKE.md` (sections marked ON-BOX) and mention the result in the
+release notes. A release whose row says "not run" has not been verified on Unraid
+hardware, whatever the automated suites say.
+
+## Results
+
+| Release | Unraid | Box | Date | Steps passed | Notes |
+|---|---|---|---|---|---|
+| 0.1.0-beta.1 | | | | not run | automated suites green (`make check`, `e2e-install`, `e2e`); hardware checklist pending |

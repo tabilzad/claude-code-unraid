@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Community Applications repository profile. CA requires this file at the
+  repository root (https://github.com/unraid/unraid-community-apps-starter);
+  the plugin wrapper lives in ca/. Add a Forum element once the support thread
+  on forums.unraid.net exists.
+-->
+<CommunityApplications>
+  <Profile>
+    Claude Code for Unraid: an Unraid plugin that installs Anthropic's Claude Code command-line agent natively on the host, keeps its login and conversations across reboots, supervises sessions around array stops and starts, and enforces a safety policy around an agent that runs as root. One plugin, MIT licensed, maintained on GitHub. Community project, not affiliated with Anthropic or Lime Technology. Support: GitHub issues (web page below) and the forum support thread.
+  </Profile>
+  <Icon>https://raw.githubusercontent.com/tabilzad/claude-code-unraid/main/ca/claude-code-unraid.png</Icon>
+  <WebPage>https://github.com/tabilzad/claude-code-unraid</WebPage>
+</CommunityApplications>

@@ -7,11 +7,57 @@ below is the release tag.
 
 ## [Unreleased]
 
+## [0.1.0-beta.1] - 2026-10-23
+
+First public beta. Everything below is new.
+
 ### Added
 
-- Repository skeleton, Docker-based dev environment and CI.
-- `scripts/claude-release`: resolves the stable Claude Code version, verifies the
-  GPG-signed release manifest against the pinned Anthropic key and pins the
-  `linux-x64` sha256 in `release/claude-code.lock`. A daily workflow proposes bumps.
-- Packaging: reproducible `.txz` build, `.plg` rendering from a template, plg lint
-  and the tag-driven release workflow.
+- Native install of Claude Code (`linux-x64`), pinned to one version whose sha256 was
+  taken from Anthropic's GPG-signed release manifest. The binary is cached on the flash
+  drive next to the previous version, verified before every use, and never downloaded
+  during boot when the cache is valid. A failed download leaves the plugin installed
+  and reports it; a corrupt current binary falls back to the previous verified one.
+- `claude` launcher: every session runs in a private mount namespace with `/boot`
+  read-only (kernel enforced). `--boot-rw` lifts it for one session when allowed in the
+  settings, and is logged.
+- Storage modes: pool mode once the array is started (login, settings and transcripts
+  under `<appdata>/claude-code-unraid`, a direct pool path when the share lives on one
+  pool) and fallback mode in RAM while it is not. The switch happens on
+  `disks_mounted`. An optional emergency token on the flash drive makes fallback mode
+  usable without a browser login.
+- Managed policy baseline, restored on every boot: Manual permission mode, bypass mode
+  disabled, auto mode and Remote Control disabled unless enabled in the settings, a
+  deny list for catastrophic commands, an allow list of read-only diagnostics, a guard
+  hook (blocks `mkfs`, `wipefs`, `dd` to disks, `rm -rf` on `/mnt` and `/boot`,
+  `zpool destroy`, SMART state changes; prompts with a reason for network access,
+  container host access, mounts, cron, service restarts, plugin changes and edits to
+  protected paths), an audit hook (one redacted syslog line per tool call) and a
+  session hook that feeds the session registry. User drop-ins under
+  `/boot/config/plugins/claude-code-unraid/policy.d/` can tighten the policy.
+- Supervised sessions in a bundled tmux (the unmodified Slackware 15.0 package, pinned
+  by sha256): `claude-unraid start|attach|list|stop|restore`. Sessions are stopped
+  before the array stops, marked for restore, and resumed with `--resume` after the
+  array starts. Plain `claude` sessions are left alone.
+- `claude-unraid` helper: `status [--json]`, `work`, `token set|clear|status`,
+  `verify`, `doctor`, `migrate-login`.
+- Settings page under Settings, User Utilities, Claude Code: status, storage mode,
+  data directory, policy switches, verify, restore, stop all, install log.
+- `scripts/collect-diagnostics`: a redacted report for bug reports.
+- Development: Docker dev environment with pinned tools, shell and PHP lint, plg lint,
+  escaping lint, 238 bats and 27 PHP tests, an install test with Lime Technology's real
+  plugin manager, an emulated-host end-to-end harness (install, read-only `/boot`, pool
+  mode, supervised sessions, stop and restore, reboot from cache, update, degraded
+  fallback, remove), CI, a daily workflow that proposes Claude Code version bumps as
+  pull requests, and a tag-driven release workflow.
+
+### Security
+
+- Independent review before the release (`docs/security-review-2026-10-23.md`). Its
+  findings are handled in this version: the guard folds `/proc/<pid>/root` (the host's
+  mount namespace, where the read-only flash drive does not apply) and `/x/..` before
+  matching, so `dd`, `rm` and `mkfs` through those spellings are still blocked and any
+  other use of the gateway asks; the audit log redacts more password forms (`mysql -p`,
+  `sshpass -p`, `PGPASSWORD=`, `passphrase:`, a bare `pass X`); `restore.log` and
+  `sessions.log` are bounded like `install.log`. `docs/SECURITY.md` states the limit of
+  the read-only flash drive plainly and lists the accepted risks.

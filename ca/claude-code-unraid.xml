@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Community Applications wrapper for the Claude Code for Unraid plugin.
+  Layout and fields follow https://github.com/unraid/unraid-community-apps-starter
+  and https://ca.unraid.net/submit/help/xml-field-reference. PluginURL must be
+  identical to the pluginURL entity in plugin/claude-code-unraid.plg.in
+  (make lint-ca checks that). Support is taken from the plg's support attribute
+  when the plg carries one, which it does.
+-->
+<Plugin>
+  <Name>Claude Code for Unraid</Name>
+  <PluginURL>https://github.com/tabilzad/claude-code-unraid/releases/latest/download/claude-code-unraid.plg</PluginURL>
+  <PluginAuthor>tabilzad</PluginAuthor>
+  <Support>https://github.com/tabilzad/claude-code-unraid/issues</Support>
+  <Project>https://github.com/tabilzad/claude-code-unraid</Project>
+  <ReadMe>https://raw.githubusercontent.com/tabilzad/claude-code-unraid/main/README.md</ReadMe>
+  <Overview>
+    Installs Anthropic's Claude Code command-line agent natively on the Unraid host, so that it works in any terminal, keeps its login and conversations across reboots, and keeps working with the array stopped and Docker disabled (diagnostics and recovery). Supervised sessions are stopped before the array stops and brought back after it starts.
+
+    Every session runs under a managed policy: Manual permission mode, bypass mode disabled, a guard that blocks catastrophic commands (mkfs, wipefs, dd to a disk, rm -rf on /mnt or /boot, zpool destroy) and asks before risky ones, an audit line in the syslog for every tool call, and a flash drive that is mounted read-only inside the session. Claude Code runs as root, like every plugin: the policy reduces accidents, it is not a security boundary. The permission prompts in your terminal are your control.
+
+    Requirements: Unraid 7.0.0 or newer, a Claude subscription or an Anthropic API key, and about 600 MB free on the flash drive (the current and the previous Claude Code binary are cached there so that boots never need the network).
+
+    Claude Code is proprietary Anthropic software. The plugin downloads it from Anthropic's official release servers at install time and checks it against a sha256 taken from Anthropic's GPG-signed release manifest; nothing is redistributed. This is a community project, not affiliated with or endorsed by Anthropic or Lime Technology.
+  </Overview>
+  <Category>AI: Tools:System Tools:Utilities</Category>
+  <Icon>https://raw.githubusercontent.com/tabilzad/claude-code-unraid/main/ca/claude-code-unraid.png</Icon>
+  <License>MIT</License>
+  <MinVer>7.0.0</MinVer>
+  <Beta>true</Beta>
+  <Changes>
+    See https://github.com/tabilzad/claude-code-unraid/blob/main/CHANGELOG.md. The plugin's own change log (shown by the plugin manager) carries the same entries.
+  </Changes>
+</Plugin>

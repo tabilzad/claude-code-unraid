@@ -86,15 +86,26 @@ The semantic version is the tag and appears as `pluginVersion` in the plg and in
 2. Move the `[Unreleased]` entries in `CHANGELOG.md` under a `## [X.Y.Z] - YYYY-MM-DD`
    heading and start a new empty `[Unreleased]` section. Commit.
 3. Run `./scripts/dev-env make check` and `./scripts/dev-env --root make e2e-install`.
-4. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z"` and push the tag. Tags containing `-`
-   (`v0.1.0-beta.1`) become pre-releases, which `releases/latest/download/` skips; beta
-   users install from the tag's own asset URL.
+4. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z"` and push the tag. Every tag becomes a full
+   GitHub release, never a pre-release, so that
+   `releases/latest/download/claude-code-unraid.plg`, the `pluginURL` that installed
+   copies and Community Applications use, always resolves to the newest tag. The
+   `-beta.N` suffix in the version and the `Beta` flag in the CA entry carry the beta
+   status. For a build meant for testers only, run `gh release edit vX.Y.Z --prerelease`
+   right after the workflow finishes: `latest` then skips it.
 5. `.github/workflows/release.yml` runs `make check`, builds the package with the tag's
    commit date as `SOURCE_DATE_EPOCH`, renders the plg with the release asset URL,
    re-runs `lint-plg`, writes `SHA256SUMS`, and creates the GitHub release with the plg,
    the package and the checksums. The plg's `pluginURL` points at
    `releases/latest/download/claude-code-unraid.plg`, which is how installed copies find
    updates.
+
+## Community Applications
+
+`ca/README.md` describes the CA files (`ca/claude-code-unraid.xml`, `ca_profile.xml`,
+the icon) and the submission steps. The wrapper's `PluginURL` and the plg's `pluginURL`
+must stay identical; `make lint-ca` checks it. A release needs no resubmission: CA
+reads the plg at that URL.
 
 ## Rotating the signing key
 
