@@ -13,7 +13,7 @@ SH_FILES    := $(shell ./scripts/list-shell-files)
 PHP_FILES   := $(shell find src scripts tests -name '*.php' -not -path 'tests/vendor/*' | sort)
 PLG_TEMPLATE := plugin/$(PLUGIN).plg.in
 
-.PHONY: check lint test build fmt lint-shell lint-php lint-plg lint-workflows test-bats test-php list-shell-files
+.PHONY: check lint test build fmt lint-shell lint-php lint-plg lint-workflows lint-escaping test-bats test-php list-shell-files e2e-install e2e
 
 check: lint test
 	@echo "check: ok"
@@ -83,6 +83,11 @@ build:
 # container (needs root in the container: ./scripts/dev-env --root make e2e-install).
 e2e-install:
 	tests/e2e/plg-install.sh
+
+# The emulated host: all nine scenarios (needs root and --privileged:
+# DEV_ENV_DOCKER_ARGS=--privileged ./scripts/dev-env --root make e2e).
+e2e:
+	tests/e2e/emulated-host.sh
 
 fmt:
 	shfmt -i 2 -ci -w $(SH_FILES)

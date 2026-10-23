@@ -136,6 +136,12 @@ must print a "Read-only file system" error and `rc=1`, while `/boot` stays writa
 outside. See section 2 for why this is expected to hold. The launcher refuses to start
 when the remount fails, so an unexpected result on hardware is loud, not silent.
 
+Verified on Linux (not Unraid) by the emulated host (`tests/e2e/emulated-host.sh`,
+scenario 1, privileged container, `/boot` a tmpfs): a write to `/boot` from inside a
+session started through the real launcher fails, `/boot` stays writable outside the
+session, and `--boot-rw` is refused by default. What remains on-box is Unraid's own
+mount layout (vfat on `/boot`, the propagation of `/mnt`).
+
 ## 5. Config dir
 
 Source: docs (`env-vars`, `settings`).

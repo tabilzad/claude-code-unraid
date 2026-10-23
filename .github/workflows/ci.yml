@@ -39,3 +39,20 @@ jobs:
 
       - name: Install, reboot, corrupt-cache, remove and LOCAL scenarios
         run: ./scripts/dev-env --root make e2e-install
+
+  # The emulated host needs mount namespaces and tmpfs mounts, hence a
+  # privileged container, isolated in its own job.
+  e2e-host:
+    name: emulated host, nine scenarios (privileged Docker dev-env)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run the emulated host
+        env:
+          DEV_ENV_DOCKER_ARGS: --privileged
+        run: ./scripts/dev-env --root make e2e

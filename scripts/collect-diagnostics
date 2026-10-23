@@ -1,0 +1,83 @@
+#!/bin/bash
+# collect-diagnostics: gather the plugin's state on an Unraid box for a bug
+# report, with tokens, e-mail addresses and disk serial numbers redacted.
+#
+#   /usr/local/emhttp/plugins/claude-code-unraid/scripts/collect-diagnostics [OUT]
+#
+# Writes OUT (default /tmp/claude-code-unraid-diagnostics-<timestamp>.txt) and
+# prints its path. Contents: claude-unraid status --json, the last 200 lines
+# of the plugin logs, the plugin's syslog lines, the managed-settings file
+# names (not the contents of user drop-ins), directory listings of the plugin
+# directories, the cfg (emergency token never included) and version info.
+# Review the file before sharing it.
+set -uo pipefail
+
+PLUGIN=claude-code-unraid
+ROOT=${ROOT:-}
+out=${1:-/tmp/$PLUGIN-diagnostics-$(date -u +%Y%m%dT%H%M%SZ).txt}
+
+redact() {
+  sed -E \
+    -e 's/sk-ant-[A-Za-z0-9_-]{6,}/[redacted-token]/g' \
+    -e 's/(CLAUDE_CODE_OAUTH_TOKEN|token|TOKEN)=[^[:space:]]+/\1=[redacted]/g' \
+    -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[redacted-email]/g' \
+    -e 's/([Ss]erial[ _-]?([Nn]umber)?[:=][[:space:]]*)[A-Za-z0-9_-]+/\1[redacted-serial]/g' \
+    -e 's/(ata|nvme|usb|scsi)-([A-Za-z0-9_]+)-([A-Za-z0-9]{6,})/\1-\2-[redacted-serial]/g'
+}
+
+section() { printf '\n===== %s =====\n' "$*"; }
+
+{
+  section "collected"
+  date -u +%Y-%m-%dT%H:%M:%SZ
+  section "unraid version"
+  cat "$ROOT/etc/unraid-version" 2>/dev/null || echo "unknown"
+  section "plugin"
+  readlink "$ROOT/var/log/plugins/$PLUGIN.plg" 2>/dev/null || echo "not registered"
+  found=0
+  for entry in "$ROOT/var/lib/pkgtools/packages/$PLUGIN"-*; do
+    [ -e "$entry" ] || continue
+    basename -- "$entry"
+    found=1
+  done
+  [ "$found" = 1 ] || echo "package not installed"
+  section "claude-unraid status --json"
+  if [ -x "$ROOT/usr/local/bin/claude-unraid" ]; then
+    timeout 30 "$ROOT/usr/local/bin/claude-unraid" status --json 2>&1
+  else
+    echo "helper not installed"
+  fi
+  section "run state"
+  for f in "$ROOT/run/$PLUGIN"/*.state "$ROOT/run/$PLUGIN/mode"; do
+    [ -f "$f" ] || continue
+    printf -- '--- %s ---\n' "${f#"$ROOT"}"
+    cat "$f"
+  done
+  section "cfg (/boot/config/plugins/$PLUGIN/$PLUGIN.cfg)"
+  cat "$ROOT/boot/config/plugins/$PLUGIN/$PLUGIN.cfg" 2>/dev/null || echo "(defaults)"
+  section "emergency token"
+  [ -f "$ROOT/boot/config/plugins/$PLUGIN/emergency-token" ] && echo "present (contents never collected)" || echo "absent"
+  section "managed settings files"
+  ls -la "$ROOT/etc/claude-code" "$ROOT/etc/claude-code/managed-settings.d" 2>/dev/null || echo "none"
+  printf -- '--- baseline ---\n'
+  cat "$ROOT/etc/claude-code/managed-settings.d/99-$PLUGIN-baseline.json" 2>/dev/null || echo "missing"
+  section "plugin directories"
+  ls -la "$ROOT/usr/local/emhttp/plugins/$PLUGIN" "$ROOT/usr/local/emhttp/plugins/$PLUGIN/scripts" "$ROOT/usr/local/emhttp/plugins/$PLUGIN/event" \
+    "$ROOT/usr/local/emhttp/plugins/$PLUGIN/policy" "$ROOT/usr/local/lib/$PLUGIN" "$ROOT/usr/local/lib/$PLUGIN/bin" \
+    "$ROOT/boot/config/plugins/$PLUGIN" "$ROOT/boot/config/plugins/$PLUGIN/bin" "$ROOT/boot/config/plugins/$PLUGIN/pkg" \
+    "$ROOT/run/$PLUGIN" "$ROOT/run/$PLUGIN/sessions" 2>&1
+  section "flash free space"
+  df -h "$ROOT/boot" 2>/dev/null
+  section "mounts"
+  findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS,PROPAGATION /boot /mnt /mnt/user 2>/dev/null || grep -E ' /boot | /mnt' "$ROOT/proc/self/mountinfo" 2>/dev/null
+  section "plugin logs (last 200 lines each)"
+  for f in "$ROOT/var/log/$PLUGIN"/*.log; do
+    [ -f "$f" ] || continue
+    printf -- '--- %s ---\n' "${f#"$ROOT"}"
+    tail -n 200 "$f"
+  done
+  section "syslog lines (plugin, audit, plugin manager)"
+  grep -h -E "$PLUGIN|plugin-manager" "$ROOT/var/log/syslog" 2>/dev/null | tail -n 300 || echo "no syslog access"
+} 2>&1 | redact >"$out"
+
+printf '%s\n' "$out"

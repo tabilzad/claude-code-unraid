@@ -199,7 +199,7 @@ Merge semantics (documented): drop-ins load alphabetically after `managed-settin
 
 ## 12. WebGUI
 
-One page: Settings → User Utilities → Claude Code (`PLUGIN.page`, `Menu="Utilities"`).
+One page: Settings → User Utilities → Claude Code (`ClaudeCode.page`, `Menu="Utilities"`; the plg's `launch` attribute is `Settings/ClaudeCode`).
 - **Status panel:** the same data as `claude-unraid status --json`.
 - **Settings form:** DATA_DIR, restore on/off, max restore, cleanup days, auto-mode allowed, `/boot` rw allowed, Remote Control allowed. Saved through the standard Unraid `/update.php` with `csrf_token`; `#command` then runs `install-policy` so the baseline is re-rendered.
 - **Actions:** verify binary, restore sessions, stop all sessions, show live log (`openTerminal` pattern used by built-in pages). Each is posted to `include/exec.php` with an action allowlist; CSRF is enforced globally by `local_prepend.php` (`csrf_token` field or `X-CSRF-Token` header, HTTP 403 otherwise).
