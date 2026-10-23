@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Print every shell file that lint and fmt should look at: files under src/,
+# scripts/, tests/ and plugin/ that end in .sh, .bash or .bats, or whose first
+# line is a bash shebang. Vendored third-party code and git metadata are skipped.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+while IFS= read -r -d '' f; do
+  case "$f" in
+    ./tests/vendor/* | ./.git/* | ./dist/* | ./.tmp/*) continue ;;
+  esac
+  case "$f" in
+    *.sh | *.bash | *.bats)
+      printf '%s\n' "${f#./}"
+      continue
+      ;;
+  esac
+  if IFS= read -r first <"$f" 2>/dev/null; then
+    case "$first" in
+      '#!/bin/bash'* | '#!/usr/bin/env bash'* | '#!/bin/sh'* | '#!/usr/bin/env sh'*)
+        printf '%s\n' "${f#./}"
+        ;;
+    esac
+  fi
+done < <(find ./src ./scripts ./tests ./plugin -type f -print0 2>/dev/null | sort -z)

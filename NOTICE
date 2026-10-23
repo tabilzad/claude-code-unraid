@@ -1,0 +1,38 @@
+Claude Code for Unraid (claude-code-unraid)
+Copyright (c) 2026 tabilzad
+Licensed under the MIT License; see LICENSE.
+
+This plugin is not affiliated with, endorsed by, or supported by Anthropic PBC
+or Lime Technology, Inc. "Claude" and "Claude Code" are trademarks of
+Anthropic PBC. "Unraid" is a trademark of Lime Technology, Inc.
+
+The plugin never redistributes Claude Code. At install time it downloads the
+Claude Code CLI from Anthropic's official release bucket
+(https://downloads.claude.ai/claude-code-releases/) and verifies it against a
+SHA256 taken from Anthropic's GPG-signed release manifest. Claude Code is
+proprietary software governed by Anthropic's terms:
+https://www.anthropic.com/legal/consumer-terms and
+https://www.anthropic.com/legal/commercial-terms
+
+Third-party components
+----------------------
+
+1. claude-guard, settings.json and the guard test cases from
+   mygrexit/claude-unraid-manager (https://github.com/mygrexit/claude-unraid-manager)
+   MIT License, Copyright (c) 2026 mygrexit.
+   Adapted in src/usr/local/emhttp/plugins/claude-code-unraid/policy/guard and
+   tests/bats/guard.bats. The container-specific pieces (the `host` wrapper and
+   `/host/boot`) were removed; Unraid-native rules were added.
+
+2. tmux (https://github.com/tmux/tmux), ISC License, Copyright (c) Nicholas
+   Marriott and contributors. The plugin fetches the unmodified Slackware 15.0
+   package tmux-3.2a-x86_64-1.txz from an official Slackware mirror at install
+   time, verifies its SHA256 (CI verified the package signature against the
+   Slackware Linux Project key), and extracts only usr/bin/tmux into the plugin's
+   own directory. The package is not redistributed with the plugin.
+
+3. The Unraid plugin manager script `plugin` from unraid/webgui
+   (emhttp/plugins/dynamix.plugin.manager/scripts/plugin),
+   Copyright 2005-2025 Lime Technology, GPLv2 only.
+   A copy is vendored under tests/vendor/ for the test suite only. It is never
+   shipped in the plugin package.

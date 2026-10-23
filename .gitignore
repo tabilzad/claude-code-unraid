@@ -1,0 +1,14 @@
+# build output
+/dist/
+/.tmp/
+*.txz
+*.tgz
+!tests/fixtures/**/*.txz
+
+# rendered plugin files (the template is plugin/*.plg.in)
+/plugin/*.plg
+
+# local tooling
+/.dev-env.id
+/.cache/
+*.log

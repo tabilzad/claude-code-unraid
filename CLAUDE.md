@@ -80,6 +80,8 @@ docs/                    # SPEC, SPIKE, SECURITY, TESTING, user docs
 - **Logging:** `logger -t PLUGIN` for anything an admin should see. Plugin-private logs go to `/var/log/PLUGIN/` (RAM), and the logs must be bounded.
 - **Config:** `/boot/config/plugins/PLUGIN/PLUGIN.cfg`, `KEY="value"`, with defaults in `src/.../default.cfg`. Read it with a parser that never `source`s user-editable files.
 - **Tests:** every script gets bats tests that run without a real Unraid (fixtures for `/boot`, `/mnt`, `/proc/self/mountinfo`, emhttp ini files). A bug fix gets a regression test.
+- **`ROOT` prefix:** every script that touches an absolute host path prefixes it with `${ROOT:-}` (shell) or `getenv('ROOT')` (PHP), for example `"${ROOT:-}/boot/config/plugins/PLUGIN"`. `ROOT` is empty on a real box; tests point it at a fake root built by `tests/helpers/fixtures.bash` (`make_fakeroot`). Commands that the host provides (`logger`, `notify`, `upgradepkg`, `unshare`) are looked up on `PATH` or under `${ROOT:-}/usr/local/emhttp/...` so that the fixtures can stub them.
+- **Dev environment:** `./scripts/dev-env make check` runs everything inside the pinned Docker image (`scripts/devenv/Dockerfile`); only Docker is required. Plain `make check` works where the tools are installed. The Dockerfile header says how to bump the pinned digests and tool checksums.
 - Prefer small single-purpose scripts over one large one.
 
 ## Workflow
