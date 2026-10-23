@@ -1,0 +1,5 @@
+# Normalize line endings: everything is LF in the working tree too, because
+# scripts are executed inside Linux containers and on Unraid.
+* text=auto eol=lf
+*.png binary
+*.txz binary
