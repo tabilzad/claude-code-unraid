@@ -1,0 +1,182 @@
+#!/bin/bash
+# data-dir: resolve and validate the plugin's data directory (SPEC section 3,
+# CLAUDE.md invariant 2: never create a share, never touch /mnt when it is not
+# mounted).
+#
+#   data-dir                 print the resolved path; exit 1 with the reason on
+#                            stderr when it is not usable
+#   data-dir --check [PATH]  print KEY=value lines (DATA_DIR, SOURCE, VALID,
+#                            REASON, FUSE, EXISTS); exit 0 when valid
+#   data-dir --ensure        like --check, and create the leaf directory
+#                            (mode 0700) when it is valid and missing
+#
+# Resolution: DATA_DIR from the cfg wins. Otherwise <appdata>/<plugin>, where
+# <appdata> is DOCKER_APP_CONFIG_PATH from docker.cfg (default /mnt/user/appdata).
+# When that share is set to live on one pool (shareUseCache only|prefer with a
+# pool name) and the pool path exists, the direct pool path is used instead of
+# the FUSE path.
+#
+# A path is valid when it is under /mnt, has no odd characters, its filesystem
+# is mounted, and either it already exists or its parent exists and is at least
+# three levels deep (/mnt/<pool-or-user>/<share>), so creating the leaf can
+# never create a new share.
+set -uo pipefail
+
+CCU_SCRIPT_NAME=data-dir
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+# is_mounted TARGET: TARGET (without ROOT) appears as a mount point in
+# /proc/self/mountinfo (field 5; octal escapes are not expected under /mnt).
+is_mounted() {
+  local mountinfo="$ROOT/proc/self/mountinfo"
+  [ -r "$mountinfo" ] || return 1
+  awk -v t="$1" '$5 == t { found = 1 } END { exit !found }' "$mountinfo"
+}
+
+# mount_root PATH: the mount point that must be present for PATH: /mnt/user for
+# FUSE paths, /mnt/<pool> otherwise.
+mount_root() {
+  local path=$1 second
+  second=${path#/mnt/}
+  second=${second%%/*}
+  printf '/mnt/%s' "$second"
+}
+
+resolve() {
+  local configured appdata share sharecfg use pool
+  configured=$(cfg_get DATA_DIR "")
+  if [ -n "$configured" ]; then
+    RESOLVED=${configured%/}
+    SOURCE=cfg
+    return 0
+  fi
+  appdata=$(cfg_read_file "$DOCKER_CFG" DOCKER_APP_CONFIG_PATH 2>/dev/null) || appdata=""
+  [ -n "$appdata" ] || appdata=/mnt/user/appdata
+  appdata=${appdata%/}
+  RESOLVED="$appdata/$PLUGIN"
+  SOURCE=auto
+  if [[ "$appdata" =~ ^/mnt/user/([^/]+)$ ]]; then
+    share=${BASH_REMATCH[1]}
+    sharecfg="$ROOT/boot/config/shares/$share.cfg"
+    use=$(cfg_read_file "$sharecfg" shareUseCache 2>/dev/null) || use=""
+    pool=$(cfg_read_file "$sharecfg" shareCachePool 2>/dev/null) || pool=""
+    case "$use" in
+      only | prefer)
+        [ -n "$pool" ] || pool=cache
+        if [[ "$pool" =~ ^[A-Za-z0-9_-]+$ ]] && [ -d "$ROOT/mnt/$pool/$share" ] && is_mounted "/mnt/$pool"; then
+          RESOLVED="/mnt/$pool/$share/$PLUGIN"
+          SOURCE=pool
+        fi
+        ;;
+    esac
+  fi
+}
+
+validate() {
+  local path=$1 parent depth
+  VALID=no
+  REASON=""
+  FUSE=no
+  EXISTS=no
+  if [[ "$path" =~ [[:space:][:cntrl:]] ]]; then
+    REASON="the path contains whitespace or control characters"
+    return
+  fi
+  if [[ "$path" =~ (^|/)\.\.(/|$) ]]; then
+    REASON="the path contains '..'"
+    return
+  fi
+  case "$path" in
+    /mnt/*/*) ;;
+    *)
+      REASON="the path must be inside a share or pool under /mnt (got '$path')"
+      return
+      ;;
+  esac
+  case "$path" in /mnt/user/*) FUSE=yes ;; esac
+  local mroot
+  mroot=$(mount_root "$path")
+  if ! is_mounted "$mroot"; then
+    REASON="$mroot is not mounted (array or pool not started)"
+    return
+  fi
+  if [ -d "$ROOT$path" ]; then
+    if [ -L "$ROOT$path" ]; then
+      REASON="$path is a symlink"
+      return
+    fi
+    EXISTS=yes
+    VALID=yes
+    return
+  fi
+  if [ -e "$ROOT$path" ]; then
+    REASON="$path exists but is not a directory"
+    return
+  fi
+  parent=$(dirname -- "$path")
+  if [ ! -d "$ROOT$parent" ]; then
+    REASON="the parent directory $parent does not exist"
+    return
+  fi
+  depth=$(printf '%s' "$parent" | tr -cd '/' | wc -c)
+  # /mnt/user/appdata has three slashes; /mnt/user and /mnt/cache only two
+  if [ "$depth" -lt 3 ]; then
+    REASON="creating $path would create a new share; create the directory yourself or pick a path inside an existing share"
+    return
+  fi
+  VALID=yes
+}
+
+main() {
+  local action=print override=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check) action=check ;;
+      --ensure) action=ensure ;;
+      -*)
+        printf 'data-dir: unknown option %s\n' "$1" >&2
+        exit 64
+        ;;
+      *) override=$1 ;;
+    esac
+    shift
+  done
+
+  if [ -n "$override" ]; then
+    RESOLVED=${override%/}
+    [ -n "$RESOLVED" ] || RESOLVED=$override
+    SOURCE=argument
+  else
+    resolve
+  fi
+  validate "$RESOLVED"
+
+  if [ "$action" = ensure ] && [ "$VALID" = yes ] && [ "$EXISTS" = no ]; then
+    if mkdir -m 0700 -- "$ROOT$RESOLVED" 2>/dev/null; then
+      EXISTS=yes
+      log info "created data directory $RESOLVED"
+    else
+      VALID=no
+      REASON="could not create $RESOLVED"
+    fi
+  fi
+
+  case "$action" in
+    print)
+      if [ "$VALID" = yes ]; then
+        printf '%s\n' "$RESOLVED"
+        exit 0
+      fi
+      printf 'data-dir: %s is not usable: %s\n' "$RESOLVED" "$REASON" >&2
+      exit 1
+      ;;
+    *)
+      printf 'DATA_DIR=%s\nSOURCE=%s\nVALID=%s\nREASON=%s\nFUSE=%s\nEXISTS=%s\n' \
+        "$RESOLVED" "$SOURCE" "$VALID" "$REASON" "$FUSE" "$EXISTS"
+      [ "$VALID" = yes ]
+      ;;
+  esac
+}
+
+main "$@"

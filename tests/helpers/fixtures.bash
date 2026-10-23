@@ -39,6 +39,17 @@ make_fakeroot() {
     "$FAKEROOT/usr/local/bin" \
     "$FAKEROOT/stubs/bin"
 
+  # The plugin's own files, as the package would install them, so that the
+  # launcher and the helper find lib.sh and the scripts under ROOT.
+  cp -R "$PLUGIN_SRC"/. "$FAKEROOT/usr/local/emhttp/plugins/$PLUGIN/"
+  find "$FAKEROOT/usr/local/emhttp/plugins/$PLUGIN" -name .gitkeep -delete
+  chmod 0755 "$FAKEROOT/usr/local/emhttp/plugins/$PLUGIN"/scripts/* 2>/dev/null || true
+  local b
+  for b in "$BIN_SRC"/*; do
+    [ -f "$b" ] || continue
+    install -m 0755 "$b" "$FAKEROOT/usr/local/bin/$(basename "$b")"
+  done
+
   write_var_ini "$state"
   write_disks_ini "-"
   printf 'version="7.0.0"\n' >"$FAKEROOT/etc/unraid-version"

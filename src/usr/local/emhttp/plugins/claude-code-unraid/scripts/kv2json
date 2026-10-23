@@ -1,0 +1,47 @@
+#!/usr/bin/env php
+<?php
+/*
+ * kv2json: turn KEY=value lines on stdin into a JSON object.
+ *
+ *   a.b=text          nested string
+ *   a.b=@bool:yes     boolean (yes/true/1 -> true, anything else -> false)
+ *   a.b=@int:42       integer
+ *   a.b=@null         null
+ *   a.list[]=item     array element (repeat the key)
+ *
+ * Lets the bash side of claude-unraid produce `status --json` without ever
+ * hand-assembling JSON. Unknown or malformed lines are ignored.
+ */
+declare(strict_types=1);
+
+$out = [];
+while (($line = fgets(STDIN)) !== false) {
+    $line = rtrim($line, "\r\n");
+    if ($line === '' || !preg_match('/^([A-Za-z_][A-Za-z0-9_.]*)(\[\])?=(.*)$/s', $line, $m)) {
+        continue;
+    }
+    [, $path, $isList, $raw] = $m;
+    if (str_starts_with($raw, '@bool:')) {
+        $value = in_array(strtolower(substr($raw, 6)), ['yes', 'true', '1', 'on'], true);
+    } elseif (str_starts_with($raw, '@int:')) {
+        $value = (int) substr($raw, 5);
+    } elseif ($raw === '@null') {
+        $value = null;
+    } else {
+        $value = $raw;
+    }
+    $ref = &$out;
+    foreach (explode('.', $path) as $part) {
+        if (!isset($ref[$part]) || !is_array($ref[$part])) {
+            $ref[$part] = [];
+        }
+        $ref = &$ref[$part];
+    }
+    if ($isList !== '') {
+        $ref[] = $value;
+    } else {
+        $ref = $value;
+    }
+    unset($ref);
+}
+echo json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), "\n";

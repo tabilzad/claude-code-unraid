@@ -1,0 +1,413 @@
+#!/bin/bash
+# claude-unraid: helper CLI for the claude-code-unraid plugin (SPEC section 11).
+#
+#   claude-unraid status [--json]     plugin, binary, tmux, mode, data dir, auth, policy
+#   claude-unraid work <name>         create a workspace and print how to use it
+#   claude-unraid token set [--stdin] store the emergency token (read from stdin)
+#   claude-unraid token clear         delete it
+#   claude-unraid token status        is one present (never prints it)
+#   claude-unraid verify              re-hash the installed binary against the pin
+#   claude-unraid doctor              self-checks plus `claude doctor`
+#   claude-unraid start|stop|attach|list|restore   supervised sessions (later phase)
+#
+# Exit codes: 0 ok, 1 a check failed, 64 usage, 69 feature not available yet,
+# 78 no verified binary.
+set -uo pipefail
+
+PLUGIN=claude-code-unraid
+PLUGIN_DIR="${ROOT:-}/usr/local/emhttp/plugins/$PLUGIN"
+if [ ! -r "$PLUGIN_DIR/scripts/lib.sh" ]; then
+  printf 'claude-unraid: %s is not installed (%s is missing)\n' "$PLUGIN" "$PLUGIN_DIR/scripts/lib.sh" >&2
+  exit 81
+fi
+CCU_SCRIPT_NAME=claude-unraid
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$PLUGIN_DIR/scripts/lib.sh"
+SCRIPTS="$PLUGIN_DIR/scripts"
+TOKEN_FILE="$FLASH_DIR/emergency-token"
+WORKSPACE_RE='^[a-z0-9][a-z0-9._-]{0,47}$'
+
+usage() {
+  sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "$0"
+}
+
+die() {
+  printf 'claude-unraid: %s\n' "$*" >&2
+  exit "${2:-1}"
+}
+
+plugin_version() {
+  local entry
+  for entry in "$ROOT/var/lib/pkgtools/packages/$PLUGIN"-* "$ROOT/var/log/packages/$PLUGIN"-*; do
+    [ -f "$entry" ] || continue
+    entry=$(basename -- "$entry")
+    entry=${entry#"$PLUGIN-"}
+    printf '%s' "${entry%-noarch-*}"
+    return 0
+  done
+  printf 'unknown'
+}
+
+# flash_export: "-" (not exported), "e", "eh" or "unknown"
+flash_export() {
+  ini_section_get "$DISKS_INI" flash export 2>/dev/null || printf 'unknown'
+}
+
+flash_exported() {
+  case "$(flash_export)" in
+    - | unknown) printf 'no' ;;
+    *) printf 'yes' ;;
+  esac
+}
+
+# binary_verified: yes when the installed binary re-hashes to the pinned sha256
+binary_verified() {
+  local path sha
+  path=$(state_get "$BINARY_STATE" path 2>/dev/null || true)
+  sha=$(state_get "$BINARY_STATE" sha256 2>/dev/null || true)
+  if [ -n "$path" ] && [ -n "$sha" ] && is_regular_nonlink "$path" && sha256_eq "$path" "$sha"; then
+    printf 'yes'
+  else
+    printf 'no'
+  fi
+}
+
+# login_present CONFIG_DIR: a persisted claude.ai or API login exists there
+login_present() {
+  local dir=$1
+  if [ -s "$ROOT$dir/.credentials.json" ]; then
+    printf 'yes'
+    return
+  fi
+  if [ -s "$ROOT$dir/.claude.json" ] && grep -q '"oauthAccount"' "$ROOT$dir/.claude.json" 2>/dev/null; then
+    printf 'yes'
+    return
+  fi
+  printf 'no'
+}
+
+# ---------------------------------------------------------------------------
+cmd_status() {
+  local json=0
+  [ "${1:-}" = --json ] && json=1
+  local pversion cversion csource cerror cpath cverified tversion terror mode config_dir
+  local dd_path dd_valid dd_reason dd_fuse login token_present exported line f
+  pversion=$(plugin_version)
+  cversion=$(state_get "$BINARY_STATE" version 2>/dev/null || true)
+  csource=$(state_get "$BINARY_STATE" source 2>/dev/null || true)
+  cerror=$(state_get "$BINARY_STATE" error 2>/dev/null || true)
+  cpath=$(state_get "$BINARY_STATE" path 2>/dev/null || true)
+  cverified=$(binary_verified)
+  tversion=$(state_get "$TMUX_STATE" version 2>/dev/null || true)
+  terror=$(state_get "$TMUX_STATE" error 2>/dev/null || true)
+  mode=$("$SCRIPTS/mode" get)
+  config_dir=$("$SCRIPTS/mode" config-dir)
+  dd_path=""
+  dd_valid=no
+  dd_reason=""
+  dd_fuse=no
+  while IFS= read -r line; do
+    case "$line" in
+      DATA_DIR=*) dd_path=${line#DATA_DIR=} ;;
+      VALID=*) dd_valid=${line#VALID=} ;;
+      REASON=*) dd_reason=${line#REASON=} ;;
+      FUSE=*) dd_fuse=${line#FUSE=} ;;
+    esac
+  done < <("$SCRIPTS/data-dir" --check 2>/dev/null || true)
+  login=$(login_present "$config_dir")
+  token_present=no
+  is_regular_nonlink "$TOKEN_FILE" && token_present=yes
+  exported=$(flash_exported)
+
+  if [ "$json" = 1 ]; then
+    {
+      printf 'plugin_version=%s\n' "$pversion"
+      printf 'claude.version=%s\n' "$cversion"
+      printf 'claude.source=%s\n' "$csource"
+      printf 'claude.path=%s\n' "$cpath"
+      printf 'claude.verified=@bool:%s\n' "$cverified"
+      printf 'claude.error=%s\n' "$cerror"
+      printf 'tmux.version=%s\n' "$tversion"
+      printf 'tmux.available=@bool:%s\n' "$([ -n "$tversion" ] && echo yes || echo no)"
+      printf 'tmux.error=%s\n' "$terror"
+      printf 'mode=%s\n' "$mode"
+      printf 'config_dir=%s\n' "$config_dir"
+      printf 'data_dir.path=%s\n' "$dd_path"
+      printf 'data_dir.valid=@bool:%s\n' "$dd_valid"
+      printf 'data_dir.fuse=@bool:%s\n' "$dd_fuse"
+      printf 'data_dir.reason=%s\n' "$dd_reason"
+      printf 'auth.login=@bool:%s\n' "$login"
+      printf 'auth.emergency_token=@bool:%s\n' "$token_present"
+      printf 'flash_exported=@bool:%s\n' "$exported"
+      for f in "$POLICY_DIR"/*.json; do
+        [ -f "$f" ] && printf 'policy_files[]=%s\n' "$(basename -- "$f")"
+      done
+      printf 'sessions=@json_empty_list\n'
+    } | sed 's/^sessions=@json_empty_list$//' | "$SCRIPTS/kv2json"
+    return 0
+  fi
+
+  printf 'plugin:        %s %s\n' "$PLUGIN" "$pversion"
+  if [ -n "$cversion" ]; then
+    printf 'claude code:   %s (from %s, verified: %s)\n' "$cversion" "$csource" "$cverified"
+    [ -n "$cerror" ] && printf '               degraded: %s\n' "$cerror"
+  else
+    printf 'claude code:   NOT AVAILABLE%s\n' "${cerror:+ ($cerror)}"
+  fi
+  if [ -n "$tversion" ]; then
+    printf 'tmux:          %s\n' "$tversion"
+  else
+    printf 'tmux:          NOT AVAILABLE%s (supervised sessions disabled)\n' "${terror:+ ($terror)}"
+  fi
+  printf 'mode:          %s\n' "$mode"
+  printf 'config dir:    %s\n' "$config_dir"
+  if [ "$dd_valid" = yes ]; then
+    printf 'data dir:      %s%s\n' "$dd_path" "$([ "$dd_fuse" = yes ] && echo ' (on /mnt/user, FUSE)')"
+  else
+    printf 'data dir:      %s (NOT USABLE: %s)\n' "$dd_path" "$dd_reason"
+  fi
+  printf 'login:         %s\n' "$login"
+  printf 'emergency tok: %s\n' "$token_present"
+  printf 'flash export:  %s\n' "$exported"
+  printf 'policy files:  '
+  local any=0
+  for f in "$POLICY_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    printf '%s ' "$(basename -- "$f")"
+    any=1
+  done
+  [ "$any" = 1 ] || printf 'none'
+  printf '\n'
+  printf 'sessions:      (available after the sessions phase)\n'
+}
+
+# ---------------------------------------------------------------------------
+cmd_work() {
+  local name=${1:-}
+  [[ "$name" =~ $WORKSPACE_RE ]] || die "workspace names are 1-48 characters: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit" 64
+  local mode work_dir path
+  mode=$("$SCRIPTS/mode" get)
+  "$SCRIPTS/mode" ensure-dirs >/dev/null 2>&1 || true
+  work_dir=$("$SCRIPTS/mode" work-dir)
+  path="$work_dir/$name"
+  { mkdir -p -- "$ROOT$path" && chmod 0755 -- "$ROOT$path"; } || die "could not create $path"
+  if [ "$mode" = fallback ]; then
+    printf 'claude-unraid: note: fallback mode (array not started); this workspace lives in RAM until the array starts.\n' >&2
+  fi
+  printf '%s\n' "$path"
+  printf 'claude-unraid: workspace ready. Start a session with:\n  cd %s && claude\n' "$path" >&2
+}
+
+# ---------------------------------------------------------------------------
+warn_flash_export() {
+  if [ "$(flash_exported)" = yes ]; then
+    printf 'claude-unraid: WARNING: the flash share is exported over SMB (Main, Boot Device, Flash, SMB Security Settings). Anyone who can read it can read the emergency token. Set Export to No.\n' >&2
+    return 1
+  fi
+  return 0
+}
+
+cmd_token() {
+  local sub=${1:-}
+  shift || true
+  case "$sub" in
+    set)
+      local from_tty=0 token
+      if [ -t 0 ]; then
+        [ "${1:-}" = --stdin ] || die "token set reads the token from standard input. Pipe it in (for example from a password manager) or pass --stdin to type it without echo." 64
+        from_tty=1
+      fi
+      if [ "$from_tty" = 1 ]; then
+        IFS= read -rs -p 'Emergency token (input hidden): ' token
+        printf '\n' >&2
+      else
+        IFS= read -r token || true
+      fi
+      token=${token%$'\r'}
+      [ -n "$token" ] || die "no token read" 64
+      [[ "$token" =~ ^[A-Za-z0-9._~-]{20,4096}$ ]] || die "that does not look like a token (letters, digits, '.', '_', '~', '-', at least 20 characters, no spaces)" 64
+      mkdir -p -- "$FLASH_DIR"
+      printf '%s\n' "$token" | atomic_write "$TOKEN_FILE" 0600 || die "could not write $TOKEN_FILE"
+      unset token
+      log notice "emergency token stored"
+      printf 'claude-unraid: emergency token stored in %s (used only while the array is not started).\n' "${TOKEN_FILE#"$ROOT"}"
+      warn_flash_export || true
+      ;;
+    clear)
+      if [ -e "$TOKEN_FILE" ]; then
+        rm -f -- "$TOKEN_FILE"
+        log notice "emergency token removed"
+        printf 'claude-unraid: emergency token removed.\n'
+      else
+        printf 'claude-unraid: no emergency token was stored.\n'
+      fi
+      ;;
+    status)
+      if is_regular_nonlink "$TOKEN_FILE"; then
+        printf 'emergency token: present (%s)\n' "${TOKEN_FILE#"$ROOT"}"
+        warn_flash_export || true
+      else
+        printf 'emergency token: absent\n'
+      fi
+      ;;
+    *) die "token needs set, clear or status" 64 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+cmd_verify() {
+  local path sha version
+  path=$(state_get "$BINARY_STATE" path 2>/dev/null || true)
+  sha=$(state_get "$BINARY_STATE" sha256 2>/dev/null || true)
+  version=$(state_get "$BINARY_STATE" version 2>/dev/null || true)
+  if [ -z "$path" ] || [ -z "$sha" ]; then
+    printf 'verify: no Claude Code binary is installed (%s)\n' "$(state_get "$BINARY_STATE" error 2>/dev/null || echo 'no state')" >&2
+    return 78
+  fi
+  if ! is_regular_nonlink "$path"; then
+    printf 'verify: FAIL: %s is missing or not a regular file\n' "$path" >&2
+    return 1
+  fi
+  if sha256_eq "$path" "$sha"; then
+    printf 'verify: OK: Claude Code %s at %s matches the pinned sha256\n' "$version" "$path"
+    return 0
+  fi
+  printf 'verify: FAIL: %s does not match the pinned sha256 %s\n' "$path" "$sha" >&2
+  log err "verify: $path does not match the pinned sha256"
+  notify alert "Claude Code binary verification failed" "$path does not match its pinned sha256. Reinstall the plugin."
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+cmd_doctor() {
+  local fails=0 warns=0
+  pass() { printf 'PASS  %s\n' "$*"; }
+  warn() {
+    printf 'WARN  %s\n' "$*"
+    warns=$((warns + 1))
+  }
+  fail() {
+    printf 'FAIL  %s\n' "$*"
+    fails=$((fails + 1))
+  }
+
+  local path sha version err
+  path=$(state_get "$BINARY_STATE" path 2>/dev/null || true)
+  sha=$(state_get "$BINARY_STATE" sha256 2>/dev/null || true)
+  version=$(state_get "$BINARY_STATE" version 2>/dev/null || true)
+  err=$(state_get "$BINARY_STATE" error 2>/dev/null || true)
+  if [ -n "$path" ] && is_regular_nonlink "$path" && sha256_eq "$path" "$sha"; then
+    pass "Claude Code $version installed and verified ($path)"
+    [ -n "$err" ] && warn "running a previous version: $err"
+  else
+    fail "Claude Code binary unavailable: ${err:-not installed}"
+  fi
+
+  local tver terr
+  tver=$(state_get "$TMUX_STATE" version 2>/dev/null || true)
+  terr=$(state_get "$TMUX_STATE" error 2>/dev/null || true)
+  if [ -n "$tver" ] && [ -x "$LIB_DIR/bin/tmux" ]; then
+    pass "tmux $tver available for supervised sessions"
+  else
+    warn "tmux unavailable (${terr:-not installed}); supervised sessions and restore are disabled"
+  fi
+
+  local mode config_dir
+  mode=$("$SCRIPTS/mode" get)
+  config_dir=$("$SCRIPTS/mode" config-dir)
+  pass "storage mode: $mode (config dir $config_dir)"
+
+  local line dd_path dd_valid dd_reason dd_fuse
+  dd_path="" dd_valid=no dd_reason="" dd_fuse=no
+  while IFS= read -r line; do
+    case "$line" in
+      DATA_DIR=*) dd_path=${line#DATA_DIR=} ;;
+      VALID=*) dd_valid=${line#VALID=} ;;
+      REASON=*) dd_reason=${line#REASON=} ;;
+      FUSE=*) dd_fuse=${line#FUSE=} ;;
+    esac
+  done < <("$SCRIPTS/data-dir" --check 2>/dev/null || true)
+  if [ "$dd_valid" = yes ]; then
+    if [ "$dd_fuse" = yes ]; then
+      warn "data directory $dd_path is on /mnt/user (FUSE); a direct pool path (for example /mnt/cache/appdata/$PLUGIN) is faster and avoids the mover"
+    else
+      pass "data directory $dd_path"
+    fi
+  else
+    if [ "$(array_state)" = STARTED ]; then
+      fail "data directory $dd_path not usable: $dd_reason"
+    else
+      warn "data directory $dd_path not usable while the array is stopped: $dd_reason"
+    fi
+  fi
+
+  local free
+  free=$(free_kb "$FLASH_DIR" 2>/dev/null || true)
+  if [[ "$free" =~ ^[0-9]+$ ]]; then
+    if [ "$free" -lt 716800 ]; then
+      warn "only $((free / 1024)) MiB free on the flash drive; two cached Claude Code versions need about 560 MiB"
+    else
+      pass "$((free / 1024)) MiB free on the flash drive"
+    fi
+  fi
+
+  case "$(flash_export)" in
+    -) pass "flash share is not exported over SMB" ;;
+    unknown) warn "could not determine whether the flash share is exported (disks.ini unreadable)" ;;
+    *)
+      if is_regular_nonlink "$TOKEN_FILE"; then
+        fail "the flash share is exported over SMB and an emergency token is stored on it; set Export to No or clear the token"
+      else
+        warn "the flash share is exported over SMB; the plugin's cfg and policy drop-ins are readable by anyone who can reach the share"
+      fi
+      ;;
+  esac
+  if is_regular_nonlink "$TOKEN_FILE"; then
+    pass "emergency token present (used only in fallback mode)"
+  fi
+
+  if [ -f "$POLICY_DIR/99-$PLUGIN-baseline.json" ]; then
+    pass "managed policy baseline present"
+  else
+    fail "managed policy baseline missing from $POLICY_DIR (run the plugin install again)"
+  fi
+
+  if [ -x "$BIN_LAUNCHER" ] && [ -n "$path" ] && is_regular_nonlink "$path"; then
+    printf -- '----- claude doctor -----\n'
+    if run_with_timeout 90 "$BIN_LAUNCHER" doctor </dev/null; then
+      pass "claude doctor completed"
+    else
+      warn "claude doctor exited with status $?"
+    fi
+  fi
+
+  printf 'doctor: %s failure(s), %s warning(s)\n' "$fails" "$warns"
+  [ "$fails" = 0 ]
+}
+
+# ---------------------------------------------------------------------------
+case "${1:-}" in
+  status)
+    shift
+    cmd_status "$@"
+    ;;
+  work)
+    shift
+    cmd_work "$@"
+    ;;
+  token)
+    shift
+    cmd_token "$@"
+    ;;
+  verify) cmd_verify ;;
+  doctor) cmd_doctor ;;
+  start | stop | attach | list | restore)
+    printf 'claude-unraid: %s is not available yet (supervised sessions arrive in a later phase).\n' "$1" >&2
+    exit 69
+    ;;
+  -h | --help | help | '')
+    usage
+    [ -n "${1:-}" ] || exit 64
+    ;;
+  *) die "unknown command '$1' (try: claude-unraid help)" 64 ;;
+esac

@@ -1,0 +1,122 @@
+#!/bin/bash
+# claude: launcher for the Claude Code binary installed by claude-code-unraid.
+#
+# What it adds around the real binary (SPEC section 7):
+#   - CLAUDE_CONFIG_DIR for the current storage mode (pool: <DATA_DIR>/config,
+#     fallback: /run/<plugin>/fallback-config), DISABLE_UPDATES=1 and
+#     DISABLE_AUTOUPDATER=1 (the plugin owns the version);
+#   - in fallback mode, the opt-in emergency token is passed through the
+#     environment (CLAUDE_CODE_OAUTH_TOKEN) and never as an argument;
+#   - the binary runs in a private mount namespace where /boot (the flash
+#     drive) is read-only. A failed remount refuses to start rather than run
+#     with a writable flash drive;
+#   - `--boot-rw` (launcher-only flag, stripped) skips the read-only wrapper,
+#     but only when ALLOW_BOOT_RW="yes" in the plugin settings. It is logged.
+#
+# Exit codes (Claude Code's own exit codes are passed through otherwise):
+#   78  no verified Claude Code binary is installed (see claude-unraid doctor)
+#   79  /boot could not be made read-only inside the namespace
+#   80  --boot-rw requested but not allowed by the settings
+#   81  the plugin's own files are missing
+set -uo pipefail
+
+PLUGIN=claude-code-unraid
+PLUGIN_DIR="${ROOT:-}/usr/local/emhttp/plugins/$PLUGIN"
+if [ ! -r "$PLUGIN_DIR/scripts/lib.sh" ]; then
+  printf 'claude: %s is not installed (%s is missing)\n' "$PLUGIN" "$PLUGIN_DIR/scripts/lib.sh" >&2
+  exit 81
+fi
+CCU_SCRIPT_NAME=claude
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$PLUGIN_DIR/scripts/lib.sh"
+
+# 1. The verified binary.
+binary=$(state_get "$BINARY_STATE" path 2>/dev/null || true)
+binary_error=$(state_get "$BINARY_STATE" error 2>/dev/null || true)
+if [ -z "$binary" ] || ! is_regular_nonlink "$binary" || [ ! -x "$binary" ]; then
+  {
+    printf 'claude: no verified Claude Code binary is installed.\n'
+    if [ -n "$binary_error" ]; then
+      printf 'claude: last install error: %s\n' "$binary_error"
+    elif [ -z "$binary" ]; then
+      printf 'claude: the plugin install has not run its binary step yet.\n'
+    else
+      printf 'claude: %s is missing or not executable.\n' "$binary"
+    fi
+    printf 'claude: run "claude-unraid doctor" for details; a reboot or plugin reinstall retries the download.\n'
+  } >&2
+  exit 78
+fi
+
+# 2. Storage mode and config directory.
+mode=$("$PLUGIN_DIR/scripts/mode" get 2>/dev/null || echo fallback)
+config_dir=$("$PLUGIN_DIR/scripts/mode" config-dir 2>/dev/null || true)
+if [ -z "$config_dir" ]; then
+  config_dir="/run/$PLUGIN/fallback-config"
+fi
+if [ "$mode" = pool ] && [ ! -d "$ROOT$config_dir" ]; then
+  printf 'claude: the data directory is not available right now; using the RAM fallback config for this session.\n' >&2
+  config_dir="/run/$PLUGIN/fallback-config"
+  mode=fallback
+fi
+case "$config_dir" in
+  "/run/$PLUGIN/"*)
+    mkdir -p -- "$ROOT$config_dir" 2>/dev/null && chmod 0700 -- "$ROOT$config_dir" 2>/dev/null || true
+    ;;
+esac
+export CLAUDE_CONFIG_DIR="$ROOT$config_dir"
+export DISABLE_UPDATES=1
+export DISABLE_AUTOUPDATER=1
+
+# 3. Emergency token: fallback mode only, environment only.
+token_file="$FLASH_DIR/emergency-token"
+if [ "$mode" = fallback ] && is_regular_nonlink "$token_file"; then
+  token=$(head -c 4096 -- "$token_file" 2>/dev/null | tr -d '\r\n')
+  if [ -n "$token" ]; then
+    export CLAUDE_CODE_OAUTH_TOKEN="$token"
+    unset token
+    log notice "fallback mode: session authenticated with the emergency token"
+    printf 'claude: fallback mode (array not started): using the emergency token for this session.\n' >&2
+  fi
+fi
+
+# 4. A hint for sessions started from / or /root.
+case "$PWD" in
+  / | "${ROOT:-/}" | /root | "$ROOT/root")
+    printf 'claude: tip: start sessions in a workspace so that they can be found and restored later:\n  claude-unraid work server   (prints the directory to cd into)\n' >&2
+    ;;
+esac
+
+# 5. Launcher-only flag.
+boot_rw=0
+args=()
+for a in "$@"; do
+  if [ "$a" = --boot-rw ]; then
+    boot_rw=1
+  else
+    args+=("$a")
+  fi
+done
+
+if [ "$boot_rw" = 1 ]; then
+  if [ "$(cfg_bool ALLOW_BOOT_RW)" != yes ]; then
+    printf 'claude: --boot-rw is disabled. Set "Allow writable /boot sessions" (ALLOW_BOOT_RW="yes") in the plugin settings to use it.\n' >&2
+    exit 80
+  fi
+  log warning "session started with --boot-rw: the flash drive is writable for this session (cwd $PWD)"
+  printf 'claude: WARNING: /boot (the flash drive) is WRITABLE in this session. Every write to it is your responsibility.\n' >&2
+  exec "$binary" "${args[@]}"
+fi
+
+# 6. Read-only /boot in a private mount namespace. The read-only flag is per
+# mount point and does not propagate to the host, whatever the propagation
+# type of /boot is (docs/SPIKE.md section 2).
+# shellcheck disable=SC2016 # $0 and $@ are meant for the inner sh, which receives the binary and its arguments
+exec unshare --mount --propagation unchanged -- /bin/sh -c '
+if ! mount -o remount,bind,ro /boot 2>/dev/null; then
+  echo "claude: could not make /boot read-only for this session; refusing to start." >&2
+  echo "claude: check: findmnt /boot   (is the flash drive mounted?)" >&2
+  echo "claude: a writable session is possible with --boot-rw when the plugin settings allow it." >&2
+  exit 79
+fi
+exec "$0" "$@"' "$binary" "${args[@]}"

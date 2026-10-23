@@ -1,0 +1,149 @@
+#!/bin/bash
+# mode: the plugin's storage mode (SPEC section 6).
+#
+#   mode get                       fallback | pool
+#   mode set fallback|pool [--force]
+#       Switches the mode and creates the directories the mode needs. Refused
+#       (exit 76) while supervised sessions are running unless --force is given;
+#       the event handlers pass --force after they stopped the sessions.
+#       "pool" is refused (exit 1) when the data directory is not usable.
+#   mode config-dir                the active CLAUDE_CONFIG_DIR
+#   mode work-dir                  the directory that holds workspaces
+#   mode ensure-dirs               create the directories for the current mode
+#
+# Fallback lives in RAM under /run/<plugin>: fallback-config (0700) and
+# fallback-work (0700). Pool mode uses <DATA_DIR>/config (0700) and
+# <DATA_DIR>/work (0755).
+set -uo pipefail
+
+CCU_SCRIPT_NAME=mode
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+FALLBACK_CONFIG="$RUN_DIR/fallback-config"
+FALLBACK_WORK="$RUN_DIR/fallback-work"
+SESSIONS_DIR="$RUN_DIR/sessions"
+
+current_mode() {
+  local m
+  m=$(cat "$MODE_FILE" 2>/dev/null || true)
+  case "$m" in
+    pool) printf 'pool' ;;
+    *) printf 'fallback' ;;
+  esac
+}
+
+# live_sessions: number of supervised sessions whose recorded PID is alive
+live_sessions() {
+  local n=0 f pid
+  for f in "$SESSIONS_DIR"/*.pid; do
+    [ -f "$f" ] || continue
+    pid=$(tr -cd '0-9' <"$f")
+    [ -n "$pid" ] || continue
+    if kill -0 "$pid" 2>/dev/null; then
+      n=$((n + 1))
+    fi
+  done
+  printf '%s' "$n"
+}
+
+data_dir() {
+  "$SCRIPT_DIR/data-dir" 2>/dev/null
+}
+
+ensure_fallback_dirs() {
+  mkdir -p -- "$RUN_DIR"
+  mkdir -p -- "$FALLBACK_CONFIG" "$FALLBACK_WORK"
+  chmod 0700 -- "$FALLBACK_CONFIG" "$FALLBACK_WORK" 2>/dev/null || true
+}
+
+ensure_pool_dirs() { # DATA_DIR
+  mkdir -p -- "$ROOT$1/config" "$ROOT$1/work"
+  chmod 0700 -- "$ROOT$1/config" 2>/dev/null || true
+  chmod 0755 -- "$ROOT$1/work" 2>/dev/null || true
+}
+
+cmd_set() {
+  local target=${1:-} force=0
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1 ;;
+      *)
+        printf 'mode: unknown option %s\n' "$1" >&2
+        exit 64
+        ;;
+    esac
+    shift
+  done
+  case "$target" in
+    fallback | pool) ;;
+    *)
+      printf 'mode: set needs "fallback" or "pool"\n' >&2
+      exit 64
+      ;;
+  esac
+  local live
+  live=$(live_sessions)
+  if [ "$live" != 0 ] && [ "$force" = 0 ]; then
+    printf 'mode: %s supervised session(s) running; stop them first (claude-unraid stop --all)\n' "$live" >&2
+    exit 76
+  fi
+  if [ "$target" = pool ]; then
+    local dir
+    if ! dir=$("$SCRIPT_DIR/data-dir" --ensure >/dev/null && data_dir); then
+      printf 'mode: cannot switch to pool: %s\n' "$("$SCRIPT_DIR/data-dir" 2>&1 >/dev/null || true)" >&2
+      exit 1
+    fi
+    ensure_pool_dirs "$dir"
+  else
+    ensure_fallback_dirs
+  fi
+  mkdir -p -- "$RUN_DIR"
+  printf '%s\n' "$target" | atomic_write "$MODE_FILE" 0644
+  log info "storage mode set to $target"
+  printf '%s\n' "$target"
+}
+
+cmd_config_dir() {
+  local dir
+  if [ "$(current_mode)" = pool ] && dir=$(data_dir) && [ -d "$ROOT$dir" ]; then
+    printf '%s/config\n' "$dir"
+  else
+    printf '%s\n' "${FALLBACK_CONFIG#"$ROOT"}"
+  fi
+}
+
+cmd_work_dir() {
+  local dir
+  if [ "$(current_mode)" = pool ] && dir=$(data_dir) && [ -d "$ROOT$dir" ]; then
+    printf '%s/work\n' "$dir"
+  else
+    printf '%s\n' "${FALLBACK_WORK#"$ROOT"}"
+  fi
+}
+
+cmd_ensure_dirs() {
+  local dir
+  if [ "$(current_mode)" = pool ] && dir=$(data_dir); then
+    ensure_pool_dirs "$dir"
+  else
+    ensure_fallback_dirs
+  fi
+}
+
+case "${1:-}" in
+  get) current_mode && printf '\n' ;;
+  set)
+    shift
+    cmd_set "$@"
+    ;;
+  config-dir) cmd_config_dir ;;
+  work-dir) cmd_work_dir ;;
+  ensure-dirs) cmd_ensure_dirs ;;
+  *)
+    sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "$0" >&2
+    exit 64
+    ;;
+esac
