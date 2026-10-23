@@ -1,6 +1,95 @@
 #!/bin/bash
-# install-tmux: placeholder until phase 04 implements it. Always exits 0 so the
-# plugin install never fails because of a missing feature.
-set -euo pipefail
-echo "claude-code-unraid: install-tmux: not implemented yet"
+# install-tmux: provide the bundled tmux at /usr/local/lib/claude-code-unraid/bin/tmux.
+#
+# Unraid ships no terminal multiplexer, and supervised sessions need one to
+# attach to. The plugin fetches the frozen Slackware 15.0 tmux package (pinned
+# by sha256 in release/tmux.lock; CI verified the Slackware signature), caches
+# it on flash next to the plugin package, verifies it and extracts only
+# usr/bin/tmux into the plugin's own directory. Nothing outside the plugin's
+# directories changes, so a user's own tmux (NerdTools) is untouched.
+#
+# Inputs (environment, rendered into the plg from release/tmux.lock):
+#   TMUX_PKG     tmux-<ver>-x86_64-<build>.txz
+#   TMUX_URL     https://mirrors.slackware.com/slackware/slackware64-15.0/slackware64/ap/<TMUX_PKG>
+#   TMUX_SHA256  64 lowercase hex
+#   TMUX_SIZE    bytes (optional)
+#
+# The outcome is in /run/<plugin>/tmux.state. Failure only means supervised
+# sessions are unavailable; `claude-unraid status` and `doctor` report it.
+# Always exits 0 (CLAUDE.md invariant 3).
+set -uo pipefail
+
+CCU_SCRIPT_NAME=install-tmux
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+MIRROR_BASE=https://mirrors.slackware.com/slackware/slackware64-15.0/slackware64/ap
+
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+record_error() {
+  state_write "$TMUX_STATE" "pkg=${TMUX_PKG:-}" "version=" "path=" "source=" "error=$1" "updated_at=$(now)"
+}
+
+main() {
+  local pkg=${TMUX_PKG:-} url=${TMUX_URL:-} sha=${TMUX_SHA256:-} size=${TMUX_SIZE:-}
+  local problem="" version=""
+  if [[ "$pkg" =~ ^tmux-([0-9A-Za-z._]+)-x86_64-[0-9]+\.txz$ ]]; then
+    version=${BASH_REMATCH[1]}
+  else
+    problem="TMUX_PKG is not a Slackware tmux package name"
+  fi
+  [[ "$sha" =~ ^[a-f0-9]{64}$ ]] || problem=${problem:-"TMUX_SHA256 is not 64 lowercase hex characters"}
+  if [ -z "$problem" ] && ! url_allowed "$url" "$MIRROR_BASE/$pkg"; then
+    problem="TMUX_URL is not the Slackware 15.0 mirror URL for $pkg"
+  fi
+  if [ -n "$size" ] && ! [[ "$size" =~ ^[0-9]+$ ]]; then
+    problem=${problem:-"TMUX_SIZE is not a number"}
+  fi
+  if [ -n "$problem" ]; then
+    log err "refusing to install tmux: $problem"
+    record_error "invalid install parameters: $problem"
+    return 0
+  fi
+
+  mkdir -p -- "$RUN_DIR" "$LIB_DIR/bin" "$FLASH_DIR/pkg" "$LOG_DIR"
+  local cache="$FLASH_DIR/pkg/$pkg" target="$LIB_DIR/bin/tmux"
+
+  # The Slackware redirector may send us to an http mirror; the pinned sha256
+  # is what guarantees integrity, so redirects are allowed for this artifact.
+  if ! CCU_DOWNLOAD_REDIRECTS=any fetch_verified "tmux $version" "$url" "$sha" "$size" "$cache"; then
+    log err "tmux: $FETCH_ERROR"
+    record_error "$FETCH_ERROR"
+    notify warning "tmux unavailable" "Supervised Claude Code sessions need tmux and it could not be fetched: $FETCH_ERROR. The plugin keeps working without it."
+    return 0
+  fi
+
+  local work extracted bin_sha
+  work=$(mktemp -d -- "$RUN_DIR/tmux.XXXXXXXX") || {
+    record_error "cannot create a temporary directory under $RUN_DIR"
+    return 0
+  }
+  extracted="$work/usr/bin/tmux"
+  if ! tar -xJf "$cache" -C "$work" usr/bin/tmux 2>/dev/null || ! is_regular_nonlink "$extracted"; then
+    rm -rf -- "$work"
+    log err "tmux: the verified package does not contain usr/bin/tmux"
+    record_error "package $pkg does not contain usr/bin/tmux"
+    return 0
+  fi
+  bin_sha=$(sha256_of "$extracted")
+  INSTALL_ERROR=""
+  if ! install_ram_copy "$extracted" "$target" "$bin_sha" 0755; then
+    rm -rf -- "$work"
+    log err "tmux: $INSTALL_ERROR"
+    record_error "$INSTALL_ERROR"
+    return 0
+  fi
+  rm -rf -- "$work"
+  prune_cache "$FLASH_DIR/pkg" tmux- "$pkg"
+  state_write "$TMUX_STATE" "pkg=$pkg" "version=$version" "path=$target" "source=$FETCH_SOURCE" "error=" "updated_at=$(now)"
+  log info "tmux $version ready at $target (source: $FETCH_SOURCE)"
+  return 0
+}
+
+main "$@"
 exit 0

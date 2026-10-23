@@ -1,6 +1,60 @@
 #!/bin/bash
-# post-install: placeholder until phase 04 implements it. Always exits 0 so the
-# plugin install never fails because of a missing feature.
-set -euo pipefail
-echo "claude-code-unraid: post-install: not implemented yet"
+# post-install: runtime state and the summary shown in the plugin install dialog.
+#
+# Runs last in the plg install sequence, on every boot and on every update.
+# Creates /run/<plugin>, sets the storage mode to "fallback" only when no mode
+# exists yet (an update while the array runs must keep "pool"), and prints a
+# summary that makes the outcome of install-binary and install-tmux visible.
+# Always exits 0.
+set -uo pipefail
+
+CCU_SCRIPT_NAME=post-install
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+mkdir -p -- "$RUN_DIR" "$LOG_DIR"
+if [ ! -f "$MODE_FILE" ]; then
+  printf 'fallback\n' | atomic_write "$MODE_FILE" 0644
+fi
+mode=$(cat "$MODE_FILE" 2>/dev/null || echo fallback)
+
+plugin_version="unknown"
+for entry in "$ROOT/var/lib/pkgtools/packages/$PLUGIN"-* "$ROOT/var/log/packages/$PLUGIN"-*; do
+  [ -f "$entry" ] || continue
+  entry=$(basename -- "$entry")
+  entry=${entry#"$PLUGIN-"}
+  plugin_version=${entry%-noarch-*}
+  break
+done
+
+claude_version=$(state_get "$BINARY_STATE" version || true)
+claude_source=$(state_get "$BINARY_STATE" source || true)
+claude_error=$(state_get "$BINARY_STATE" error || true)
+tmux_version=$(state_get "$TMUX_STATE" version || true)
+tmux_error=$(state_get "$TMUX_STATE" error || true)
+
+if [ -n "$claude_version" ]; then
+  claude_line="Claude Code $claude_version (from $claude_source)"
+  [ -n "$claude_error" ] && claude_line="$claude_line, degraded: $claude_error"
+else
+  claude_line="Claude Code NOT available: ${claude_error:-not installed}"
+fi
+if [ -n "$tmux_version" ]; then
+  tmux_line="tmux $tmux_version (supervised sessions available)"
+else
+  tmux_line="tmux NOT available: ${tmux_error:-not installed} (supervised sessions disabled)"
+fi
+
+cat <<EOF
+
+-----------------------------------------------------------
+ $PLUGIN $plugin_version
+ $claude_line
+ $tmux_line
+ storage mode: $mode
+ Not affiliated with Anthropic or Lime Technology.
+ Run 'claude-unraid status' or 'claude-unraid doctor' for details.
+-----------------------------------------------------------
+EOF
+log info "installed: plugin $plugin_version; $claude_line; $tmux_line; mode $mode"
 exit 0

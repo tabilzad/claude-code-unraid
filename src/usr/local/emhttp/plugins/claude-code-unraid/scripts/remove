@@ -1,6 +1,54 @@
 #!/bin/bash
-# remove: placeholder until phase 04 implements it. Always exits 0 so the
-# plugin install never fails because of a missing feature.
-set -euo pipefail
-echo "claude-code-unraid: remove: not implemented yet"
+# remove: uninstall the plugin's RAM side and its flash caches (SPEC section 5).
+#
+# Called by the plg's Method="remove" step. Safe after a partial install: every
+# step tolerates missing pieces. Kept on purpose, and printed at the end so the
+# user knows how to delete them: the settings file, the policy drop-ins, the
+# emergency token and the data directory (login, transcripts, workspaces).
+set -uo pipefail
+
+CCU_SCRIPT_NAME=remove
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+# 1. Supervised sessions (the helper arrives in a later phase; harmless now).
+if [ -x "$BIN_HELPER" ]; then
+  run_with_timeout 15 "$BIN_HELPER" stop --all --timeout 10 >/dev/null 2>&1 || true
+fi
+
+# 2. The Slackware package, by its full installed name.
+if command -v removepkg >/dev/null 2>&1; then
+  for db in "$ROOT/var/lib/pkgtools/packages" "$ROOT/var/log/packages"; do
+    for entry in "$db/$PLUGIN"-*; do
+      [ -f "$entry" ] || continue
+      ROOT="$ROOT" removepkg "$(basename -- "$entry")" >/dev/null 2>&1 || true
+    done
+  done
+fi
+
+# 3. RAM: binaries, launcher, helper, policy baseline, runtime state, logs.
+rm -rf -- "${LIB_DIR:?}" "${RUN_DIR:?}" "${LOG_DIR:?}" "${EMHTTP_DIR:?}"
+rm -f -- "$BIN_LAUNCHER" "$BIN_HELPER"
+rm -f -- "$POLICY_DIR/99-$PLUGIN-baseline.json" "$POLICY_DIR"/50-user-*.json
+rmdir -- "$POLICY_DIR" "$ETC_CLAUDE" 2>/dev/null || true
+
+# 4. Flash caches (the big ones). Settings and drop-ins stay.
+rm -rf -- "${FLASH_DIR:?}/bin" "${FLASH_DIR:?}/pkg"
+
+data_dir=$(cfg_get DATA_DIR "")
+[ -n "$data_dir" ] || data_dir="<appdata>/$PLUGIN (see Settings, Docker, default appdata path)"
+
+cat <<EOF
+
+$PLUGIN removed. Claude Code itself was never installed outside this plugin,
+so nothing else on the system changed.
+
+Kept, because they are yours:
+  ${FLASH_DIR#"$ROOT"}/$PLUGIN.cfg          settings      rm -f  ${FLASH_DIR#"$ROOT"}/$PLUGIN.cfg
+  ${FLASH_DIR#"$ROOT"}/policy.d/            policy drop-ins   rm -rf ${FLASH_DIR#"$ROOT"}/policy.d
+  ${FLASH_DIR#"$ROOT"}/emergency-token      if you created one   rm -f  ${FLASH_DIR#"$ROOT"}/emergency-token
+  ${data_dir}   login, transcripts, workspaces   rm -rf <that directory>
+
+To remove everything:  rm -rf ${FLASH_DIR#"$ROOT"}  and delete the data directory.
+EOF
 exit 0

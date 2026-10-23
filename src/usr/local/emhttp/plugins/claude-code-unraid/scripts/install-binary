@@ -1,6 +1,132 @@
 #!/bin/bash
-# install-binary: placeholder until phase 04 implements it. Always exits 0 so the
-# plugin install never fails because of a missing feature.
-set -euo pipefail
-echo "claude-code-unraid: install-binary: not implemented yet"
+# install-binary: make the pinned Claude Code binary available in RAM at
+# /usr/local/lib/claude-code-unraid/claude-<version>, using the flash cache.
+#
+# Inputs (environment, rendered into the plg from release/claude-code.lock):
+#   CLAUDE_VERSION  MAJOR.MINOR.PATCH
+#   CLAUDE_SHA256   64 lowercase hex, taken from Anthropic's GPG-signed manifest
+#   CLAUDE_URL      https://downloads.claude.ai/claude-code-releases/<ver>/linux-x64/claude
+#   CLAUDE_SIZE     bytes (optional; scales the timeout and the free-space check)
+#
+# Steps (SPEC section 4, "On the box"):
+#   1. a cached /boot/config/plugins/<plugin>/bin/claude-<ver> whose sha256
+#      matches is used as is;
+#   2. otherwise the file is downloaded to /run, verified, moved to flash and
+#      verified again; the cache keeps the current and the previous version;
+#   3. the binary is copied to RAM through a temp name and verified once more;
+#      a symlink or other non-regular file at the target is refused;
+#   4. on failure the newest cached previous version that still verifies
+#      against its .sha256 sidecar is installed instead (degraded mode, warning
+#      notification); without one, the error is recorded (alert notification).
+#
+# The outcome is in /run/<plugin>/binary.state (version, sha256, source,
+# path, error). This script always exits 0 so that the plugin install, and
+# therefore the boot, never fails because the network or the CDN did
+# (CLAUDE.md invariant 3).
+set -uo pipefail
+
+CCU_SCRIPT_NAME=install-binary
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+BASE_URL=https://downloads.claude.ai/claude-code-releases
+PLATFORM=linux-x64
+
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+record_error() {
+  state_write "$BINARY_STATE" "version=" "sha256=" "source=" "path=" "error=$1" "updated_at=$(now)"
+}
+
+record_ok() { # VERSION SHA SOURCE PATH [ERROR]
+  state_write "$BINARY_STATE" "version=$1" "sha256=$2" "source=$3" "path=$4" "error=${5:-}" "updated_at=$(now)"
+}
+
+prune_ram() { # KEEP_PATH
+  local f
+  for f in "$LIB_DIR"/claude-*; do
+    [ -e "$f" ] || continue
+    [ "$f" = "$1" ] && continue
+    rm -f -- "$f"
+  done
+}
+
+# find_previous SKIP_VERSION: newest cached binary (other than SKIP_VERSION)
+# that verifies against its sidecar. Prints its path.
+find_previous() {
+  local skip=$1 f sha
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in *.sha256) continue ;; esac
+    [ "$f" = "claude-$skip" ] && continue
+    [ -r "$FLASH_DIR/bin/$f.sha256" ] || continue
+    sha=$(cut -d' ' -f1 <"$FLASH_DIR/bin/$f.sha256")
+    [[ "$sha" =~ ^[a-f0-9]{64}$ ]] || continue
+    if is_regular_nonlink "$FLASH_DIR/bin/$f" && sha256_eq "$FLASH_DIR/bin/$f" "$sha"; then
+      printf '%s\n' "$FLASH_DIR/bin/$f"
+      return 0
+    fi
+  done < <(cd "$FLASH_DIR/bin" 2>/dev/null && ls -1t -- claude-* 2>/dev/null)
+  return 1
+}
+
+main() {
+  local version=${CLAUDE_VERSION:-} sha=${CLAUDE_SHA256:-} url=${CLAUDE_URL:-} size=${CLAUDE_SIZE:-}
+  local problem=""
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || problem="CLAUDE_VERSION is not MAJOR.MINOR.PATCH"
+  [[ "$sha" =~ ^[a-f0-9]{64}$ ]] || problem=${problem:-"CLAUDE_SHA256 is not 64 lowercase hex characters"}
+  if [ -z "$problem" ] && ! url_allowed "$url" "$BASE_URL/$version/$PLATFORM/claude"; then
+    problem="CLAUDE_URL is not the official release URL for $version"
+  fi
+  if [ -n "$size" ] && ! [[ "$size" =~ ^[0-9]+$ ]]; then
+    problem=${problem:-"CLAUDE_SIZE is not a number"}
+  fi
+  if [ -n "$problem" ]; then
+    log err "refusing to install: $problem"
+    record_error "invalid install parameters: $problem"
+    notify alert "Claude Code binary install failed" "$problem. The plugin package may be damaged; reinstall it."
+    return 0
+  fi
+
+  mkdir -p -- "$RUN_DIR" "$LIB_DIR" "$FLASH_DIR/bin" "$LOG_DIR"
+  local cache="$FLASH_DIR/bin/claude-$version" target="$LIB_DIR/claude-$version"
+
+  if fetch_verified "Claude Code $version" "$url" "$sha" "$size" "$cache"; then
+    INSTALL_ERROR=""
+    if install_ram_copy "$cache" "$target" "$sha" 0755; then
+      prune_cache "$FLASH_DIR/bin" claude- "claude-$version"
+      prune_ram "$target"
+      record_ok "$version" "$sha" "$FETCH_SOURCE" "$target"
+      log info "Claude Code $version ready at $target (source: $FETCH_SOURCE)"
+      return 0
+    fi
+    # A refused RAM target is not something a previous version can fix.
+    log err "Claude Code $version: $INSTALL_ERROR"
+    record_error "$INSTALL_ERROR"
+    notify alert "Claude Code binary install failed" "$INSTALL_ERROR"
+    return 0
+  fi
+
+  local err=$FETCH_ERROR previous prev_version prev_sha
+  log err "Claude Code $version: $err"
+  if previous=$(find_previous "$version"); then
+    prev_version=${previous##*/claude-}
+    prev_sha=$(cut -d' ' -f1 <"$previous.sha256")
+    INSTALL_ERROR=""
+    if install_ram_copy "$previous" "$LIB_DIR/claude-$prev_version" "$prev_sha" 0755; then
+      prune_ram "$LIB_DIR/claude-$prev_version"
+      record_ok "$prev_version" "$prev_sha" previous "$LIB_DIR/claude-$prev_version" "$err"
+      log warning "running previous Claude Code $prev_version because $version could not be installed"
+      notify warning "Claude Code update to $version failed" "Running the previous version $prev_version instead. $err"
+      return 0
+    fi
+    log err "previous version $prev_version could not be installed either: $INSTALL_ERROR"
+  fi
+
+  record_error "$err"
+  notify alert "Claude Code binary unavailable" "$err. The plugin is installed but 'claude' cannot start; run 'claude-unraid doctor' once the network is back."
+  return 0
+}
+
+main "$@"
 exit 0
