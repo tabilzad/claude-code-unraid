@@ -1,0 +1,118 @@
+#!/usr/bin/env php
+<?php
+/*
+ * render-policy: turn policy/99-baseline.json.in into the managed baseline.
+ *
+ *   render-policy TEMPLATE OUT
+ *
+ * Environment (set by scripts/install-policy from the cfg):
+ *   CCU_ALLOW_AUTO_MODE  yes|no   yes removes "disableAutoMode"
+ *   CCU_REMOTE_CONTROL   yes|no   yes removes "disableRemoteControl"
+ *   CCU_CLEANUP_DAYS     integer >= 1 for "cleanupPeriodDays" (default 90)
+ *   CCU_HOOK_DIR         absolute directory holding guard, audit, session-hook
+ *                        (defaults to the path in the template)
+ *
+ * The template is complete, strict JSON (the strictest configuration). This
+ * script only relaxes what the cfg explicitly allows, then re-validates:
+ * the result must be a JSON object that still carries every lock the plugin
+ * promises (CLAUDE.md invariant 6). A managed drop-in that is not a JSON
+ * object makes Claude Code refuse to start, so nothing is written unless the
+ * validation passes. Exit 0 on success, 1 otherwise, with the reason on stderr.
+ */
+declare(strict_types=1);
+
+function fail(string $msg): never
+{
+    fwrite(STDERR, "render-policy: $msg\n");
+    exit(1);
+}
+
+if ($argc !== 3) {
+    fail('usage: render-policy TEMPLATE OUT');
+}
+[, $template, $out] = $argv;
+
+$raw = @file_get_contents($template);
+if ($raw === false) {
+    fail("cannot read $template");
+}
+try {
+    $policy = json_decode($raw, true, 32, JSON_THROW_ON_ERROR);
+} catch (JsonException $e) {
+    fail("template is not valid JSON: {$e->getMessage()}");
+}
+if (!is_array($policy) || array_is_list($policy)) {
+    fail('template top level is not a JSON object');
+}
+
+$yes = static fn (string $v): bool => in_array(strtolower(trim($v)), ['yes', 'true', '1', 'on'], true);
+
+if ($yes((string) getenv('CCU_ALLOW_AUTO_MODE'))) {
+    unset($policy['disableAutoMode']);
+}
+if ($yes((string) getenv('CCU_REMOTE_CONTROL'))) {
+    unset($policy['disableRemoteControl']);
+}
+
+$days = trim((string) getenv('CCU_CLEANUP_DAYS'));
+if ($days === '') {
+    $days = '90';
+}
+if (!preg_match('/^[0-9]{1,5}$/', $days) || (int) $days < 1) {
+    fail("CCU_CLEANUP_DAYS must be a whole number of at least 1, got '$days'");
+}
+$policy['cleanupPeriodDays'] = (int) $days;
+
+$hookDir = rtrim((string) getenv('CCU_HOOK_DIR'), '/');
+if ($hookDir !== '') {
+    if ($hookDir[0] !== '/' || preg_match('/[\s"\'\\\\]/', $hookDir)) {
+        fail('CCU_HOOK_DIR must be an absolute path without spaces or quotes');
+    }
+    if (isset($policy['hooks']) && is_array($policy['hooks'])) {
+        foreach ($policy['hooks'] as $event => $matchers) {
+            if (!is_array($matchers)) {
+                continue;
+            }
+            foreach ($matchers as $mi => $matcher) {
+                foreach ($matcher['hooks'] ?? [] as $hi => $hook) {
+                    if (isset($hook['command']) && is_string($hook['command'])) {
+                        $policy['hooks'][$event][$mi]['hooks'][$hi]['command'] = $hookDir . '/' . basename($hook['command']);
+                    }
+                }
+            }
+        }
+    }
+}
+
+unset($policy['_comment']);
+
+// Invariant 6: the locks must survive rendering whatever the inputs were.
+$locks = [
+    ['permissions', 'defaultMode', 'default'],
+    ['permissions', 'disableBypassPermissionsMode', 'disable'],
+    ['env', 'DISABLE_UPDATES', '1'],
+    ['env', 'DISABLE_AUTOUPDATER', '1'],
+];
+foreach ($locks as [$a, $b, $expected]) {
+    if (($policy[$a][$b] ?? null) !== $expected) {
+        fail("lock $a.$b must be '$expected'");
+    }
+}
+foreach (['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd'] as $event) {
+    if (!isset($policy['hooks'][$event]) || !is_array($policy['hooks'][$event]) || $policy['hooks'][$event] === []) {
+        fail("hooks.$event is missing");
+    }
+}
+if (!is_array($policy['permissions']['deny'] ?? null) || $policy['permissions']['deny'] === []) {
+    fail('permissions.deny is missing');
+}
+
+$json = json_encode($policy, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
+// Re-parse what will be written: belt and braces before touching /etc/claude-code.
+$check = json_decode($json, true, 32, JSON_THROW_ON_ERROR);
+if (!is_array($check) || array_is_list($check)) {
+    fail('rendered policy is not a JSON object');
+}
+if (@file_put_contents($out, $json) === false) {
+    fail("cannot write $out");
+}

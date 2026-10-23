@@ -1,6 +1,101 @@
 #!/bin/bash
-# install-policy: placeholder until phase 04 implements it. Always exits 0 so the
-# plugin install never fails because of a missing feature.
-set -euo pipefail
-echo "claude-code-unraid: install-policy: not implemented yet"
+# install-policy: write the managed Claude Code policy (SPEC section 9).
+#
+#   /etc/claude-code/managed-settings.d/99-<plugin>-baseline.json
+#       rendered from policy/99-baseline.json.in with the cfg's choices
+#       (ALLOW_AUTO_MODE, REMOTE_CONTROL, CLEANUP_DAYS); loads last, wins
+#   /etc/claude-code/managed-settings.d/50-user-<name>.json
+#       one per valid /boot/config/plugins/<plugin>/policy.d/<name>.json
+#
+# Runs at install, on every boot, and when the settings are saved in the
+# WebGUI. Every file is validated before it is written (a managed drop-in that
+# is not a JSON object makes Claude Code refuse to start), written atomically
+# with mode 0644, and stale 50-user-* files we created earlier are removed.
+# Files in the directory that are not ours are never touched. Always exits 0.
+set -uo pipefail
+
+CCU_SCRIPT_NAME=install-policy
+# shellcheck source=src/usr/local/emhttp/plugins/claude-code-unraid/scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+POLICY_SRC="$SCRIPT_DIR/../policy"
+TEMPLATE="$POLICY_SRC/99-baseline.json.in"
+BASELINE="$POLICY_DIR/99-$PLUGIN-baseline.json"
+USER_SRC="$FLASH_DIR/policy.d"
+HOOK_DIR="/usr/local/emhttp/plugins/$PLUGIN/policy"
+
+# json_object_ok FILE: valid JSON whose top level is an object
+json_object_ok() {
+  "$SCRIPT_DIR/json-object-check" "$1"
+}
+
+mkdir -p -- "$RUN_DIR" "$ETC_CLAUDE" "$POLICY_DIR"
+chmod 0755 -- "$ETC_CLAUDE" "$POLICY_DIR" 2>/dev/null || true
+
+# 1. Baseline.
+tmp=$(mktemp -- "$RUN_DIR/policy.XXXXXXXX") || {
+  log err "cannot create a temporary file under $RUN_DIR"
+  exit 0
+}
+if CCU_ALLOW_AUTO_MODE="$(cfg_bool ALLOW_AUTO_MODE no)" \
+CCU_REMOTE_CONTROL="$(cfg_bool REMOTE_CONTROL no)" \
+CCU_CLEANUP_DAYS="$(cfg_get CLEANUP_DAYS 90)" \
+CCU_HOOK_DIR="${CCU_HOOK_DIR_OVERRIDE:-$HOOK_DIR}" \
+  "$SCRIPT_DIR/render-policy" "$TEMPLATE" "$tmp" && json_object_ok "$tmp"; then
+  if atomic_write "$BASELINE" 0644 <"$tmp"; then
+    log info "policy baseline written to ${BASELINE#"$ROOT"}"
+  else
+    log err "could not write ${BASELINE#"$ROOT"}"
+  fi
+else
+  log err "policy baseline could not be rendered; the previous baseline (if any) is kept"
+  notify alert "Claude Code policy not updated" "The managed policy baseline could not be rendered. Check CLEANUP_DAYS in the plugin settings and the plugin log."
+fi
+rm -f -- "$tmp"
+
+# 2. User drop-ins.
+declare -A wanted=()
+if [ -d "$USER_SRC" ]; then
+  for src in "$USER_SRC"/*.json; do
+    [ -f "$src" ] || continue
+    name=$(basename -- "$src" .json)
+    safe=$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-64)
+    [ -n "$safe" ] || safe=unnamed
+    dest="$POLICY_DIR/50-user-$safe.json"
+    if [ -n "${wanted[$dest]:-}" ]; then
+      log warning "policy drop-in $name: another drop-in already maps to 50-user-$safe.json; skipped"
+      continue
+    fi
+    if [ "$(stat -c %s -- "$src" 2>/dev/null || echo 0)" -gt 1048576 ]; then
+      log warning "policy drop-in $name is larger than 1 MiB; skipped"
+      notify warning "Claude Code policy drop-in skipped" "$name.json is larger than 1 MiB and was not loaded."
+      continue
+    fi
+    if ! json_object_ok "$src"; then
+      log warning "policy drop-in $name.json is not a JSON object; skipped (Claude Code would refuse to start with it)"
+      notify warning "Claude Code policy drop-in skipped" "/boot/config/plugins/$PLUGIN/policy.d/$name.json is not valid JSON (or not an object). It was not loaded; Claude Code keeps starting with the other files."
+      continue
+    fi
+    wanted[$dest]=1
+    if [ -f "$dest" ] && cmp -s -- "$src" "$dest"; then
+      continue
+    fi
+    if atomic_write "$dest" 0644 <"$src"; then
+      log info "policy drop-in $name.json installed as ${dest##*/}"
+    else
+      log err "could not write ${dest#"$ROOT"}"
+    fi
+  done
+fi
+
+# 3. Stale drop-ins we created earlier (prefix-matched; nothing else is touched).
+for old in "$POLICY_DIR"/50-user-*.json; do
+  [ -e "$old" ] || continue
+  if [ -z "${wanted[$old]:-}" ]; then
+    rm -f -- "$old"
+    log info "removed stale policy drop-in ${old##*/}"
+  fi
+done
+
 exit 0

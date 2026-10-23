@@ -1,0 +1,270 @@
+#!/usr/bin/env php
+<?php
+/*
+ * guard: PreToolUse hook for Bash, Write, Edit, MultiEdit and NotebookEdit.
+ *
+ * Adapted from claude-guard in mygrexit/claude-unraid-manager (MIT, Copyright
+ * (c) 2026 mygrexit; see NOTICE). The container pieces (the `host` wrapper and
+ * /host/boot) are gone; Unraid-native rules were added: smartctl options that
+ * change device state, writes to the plugin's policy and launcher, plugin
+ * install/remove/update, and the protected paths for the file tools.
+ *
+ * Permission deny rules only match the outermost command, so `Bash(mkfs*)`
+ * does not stop `sh -c 'mkfs.ext4 /dev/sdb'`. This hook looks at the whole
+ * command string, in any wrapper, after a light normalisation (empty quote
+ * pairs, backslashes, // and /./).
+ *
+ * It matches text. A command assembled from variables, written to a script
+ * first, or obfuscated beyond simple quoting is outside its reach. It is a
+ * safety net against mistakes and casual prompt injection, not a security
+ * boundary (docs/SECURITY.md).
+ *
+ * Two tiers:
+ *   block  exit 2, reason on stderr (Claude sees it). Never run from a session.
+ *   ask    JSON on stdout with permissionDecision "ask" and a reason that
+ *          starts with "claude-code-unraid guard:", exit 0. The prompt carries
+ *          the reason whatever permission mode the session is in.
+ * Anything unparsable exits 2 (fail closed); settings also set onFailure=block.
+ */
+declare(strict_types=1);
+
+const PLUGIN = 'claude-code-unraid';
+const TAG = PLUGIN . ' guard';
+
+set_error_handler(static function (int $no, string $msg): bool {
+    if (!(error_reporting() & $no)) {
+        return true; // suppressed with @ on purpose (optional files)
+    }
+    fwrite(STDERR, TAG . ": internal error ($msg); blocking to be safe.\n");
+    exit(2);
+});
+
+function block(string $label): never
+{
+    fwrite(STDERR, TAG . " blocked this command: $label.\n"
+        . "This class of command is never run from a Claude Code session on this server, even when asked.\n"
+        . "If you really want it, run it yourself from the Unraid terminal.\n");
+    exit(2);
+}
+
+function ask(string $reason): never
+{
+    echo json_encode([
+        'hookSpecificOutput' => [
+            'hookEventName' => 'PreToolUse',
+            'permissionDecision' => 'ask',
+            'permissionDecisionReason' => TAG . ": $reason. Review this before approving.",
+        ],
+    ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), "\n";
+    exit(0);
+}
+
+/** Is /boot mounted read-only in this (mount) namespace? Returns ro, rw or unknown. */
+function bootMode(): string
+{
+    $path = getenv('CCU_TEST_MODE') === '1' && getenv('CCU_MOUNTINFO') !== false
+        ? (string) getenv('CCU_MOUNTINFO')
+        : '/proc/self/mountinfo';
+    if (!is_readable($path)) {
+        return 'unknown';
+    }
+    $lines = @file($path, FILE_IGNORE_NEW_LINES);
+    if ($lines === false) {
+        return 'unknown';
+    }
+    $mode = 'unknown';
+    foreach ($lines as $line) {
+        $f = preg_split('/\s+/', $line);
+        if (count($f) < 6 || $f[4] !== '/boot') {
+            continue;
+        }
+        $opts = explode(',', $f[5]);
+        $mode = in_array('ro', $opts, true) ? 'ro' : 'rw';   // the last mount on /boot wins
+    }
+    return $mode;
+}
+
+// ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
+$raw = stream_get_contents(STDIN);
+if ($raw === false || trim($raw) === '') {
+    fwrite(STDERR, TAG . ": empty hook input; blocking to be safe.\n");
+    exit(2);
+}
+try {
+    $input = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
+} catch (JsonException) {
+    fwrite(STDERR, TAG . ": could not parse hook input; blocking to be safe.\n");
+    exit(2);
+}
+if (!is_array($input) || array_is_list($input)) {
+    fwrite(STDERR, TAG . ": hook input is not an object; blocking to be safe.\n");
+    exit(2);
+}
+$tool = (string) ($input['tool_name'] ?? '');
+$toolInput = is_array($input['tool_input'] ?? null) ? $input['tool_input'] : [];
+
+// ---------------------------------------------------------------------------
+// File tools: protected paths
+// ---------------------------------------------------------------------------
+if (in_array($tool, ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'], true)) {
+    $path = (string) ($toolInput['file_path'] ?? $toolInput['notebook_path'] ?? '');
+    if ($path === '') {
+        exit(0);
+    }
+    $norm = preg_replace('#/+#', '/', str_replace('\\', '/', $path)) ?? $path;
+    $norm = preg_replace('#/(\./)+#', '/', $norm) ?? $norm;
+    $protected = [
+        '/etc/claude-code' => 'edits the managed Claude Code policy',
+        '/usr/local/bin/claude' => 'edits the Claude Code launcher or helper',
+        '/usr/local/emhttp/plugins/' . PLUGIN => 'edits the plugin that enforces this policy',
+        '/usr/local/lib/' . PLUGIN => 'edits the installed Claude Code binary or tmux',
+    ];
+    foreach ($protected as $prefix => $why) {
+        if ($prefix === '/usr/local/bin/claude') {
+            if (preg_match('#^/usr/local/bin/claude(-unraid)?$#', $norm)) {
+                ask("$why ($norm)");
+            }
+            continue;
+        }
+        if ($norm === $prefix || str_starts_with($norm, $prefix . '/')) {
+            ask("$why ($norm)");
+        }
+    }
+    if (preg_match('#^/boot(/|$)#', $norm) && bootMode() === 'rw') {
+        ask("writes to the flash drive, which is writable in this session ($norm)");
+    }
+    exit(0);
+}
+
+if ($tool !== 'Bash') {
+    exit(0);
+}
+$cmd = (string) ($toolInput['command'] ?? '');
+if ($cmd === '') {
+    exit(0);
+}
+
+// Normalise before matching: drop empty quote pairs and backslashes (mk''fs,
+// mk\fs), collapse // and /./ so the path rules see canonical paths.
+$norm = str_replace(["''", '""', '\\'], '', $cmd);
+$norm = preg_replace('#/+#', '/', $norm) ?? $norm;
+$norm = preg_replace('#/(\./)+#', '/', $norm) ?? $norm;
+
+// ---------------------------------------------------------------------------
+// Pattern pieces (PCRE; the upstream ERE pieces, translated)
+// ---------------------------------------------------------------------------
+// Start of a command word: line start, or anything that is not part of a word
+// or an option. "/" and "." are allowed before it so /sbin/mkfs and ./mkfs match.
+$B = '(?:^|[^[:alnum:]_-])';
+// End of an argument: whitespace, a shell operator glued to it, a quote, or EOL.
+$T = '(?:[\s;&|<>)"\']|$)';
+// Optional shell quote around a path argument.
+$Q = '["\']?';
+// Characters that cannot appear inside one path segment.
+$NS = '[^/\s"\']+';
+// Mount roots whose recursive deletion is catastrophic on Unraid: /, /mnt and
+// every first-level entry below it (user shares, pools, array disks), appdata on
+// any of them, and the flash drive. A trailing "/", "/*" or "/*/" still names
+// the same root.
+$ROOTS = "(?:/|/mnt|/mnt/$NS|/mnt/$NS/appdata|/boot)/*(?:\\*/*)?";
+// Any path under /mnt that climbs with "..": resolves to something above.
+$DOTDOT = '/mnt[^\s"\']*/\.\.';
+// Any number of preceding arguments (options, paths, redirections such as 2>&1
+// or >/dev/null) within the same command segment: never across ";", "&&", "||" or "|".
+$ARGS = '(?:(?:[0-9]*>&[0-9]+|[0-9]*>>?[^\s;&|]+|[0-9]*<[^\s;&|]+|[^\s;&|]+)\s+)*';
+// Block devices that must never be written to (/dev/null and /dev/zero stay allowed).
+$BLOCKDEV = '/dev/(?:sd|hd|vd|xvd|nvme|md|mmcblk|nbd|loop|sr|zd|dm-|mapper/|disk/)';
+
+// smartctl options that change device state (the self-test is in the ask tier).
+$SMART_STATE = '(?:-(?:s|o|S|X)|--(?:smart|offlineauto|saveauto|abort|set))(?:[=\s]|$)';
+
+$blockRules = [
+    'mkfs' => "{$B}mkfs(?:\\.[[:alnum:]]+)?$T",
+    'wipefs' => "{$B}wipefs$T",
+    'shred' => "{$B}shred$T",
+    'dd writing to a block device' => "{$B}dd\\s+{$ARGS}of={$Q}{$BLOCKDEV}",
+    'writing to a block device' => "(?:>>?\\s*{$Q}{$BLOCKDEV}|{$B}(?:cp|tee|mv|install)\\s+{$ARGS}{$Q}{$BLOCKDEV})",
+    'sgdisk --zap' => "{$B}sgdisk(?:.*\\s)(?:--zap(?:-all)?|-[[:alpha:]]*[zZ])$T",
+    'zpool destroy/labelclear' => "{$B}zpool\\s+(?:destroy|labelclear)$T",
+    'rm on a mount root' => "{$B}rm\\s+{$ARGS}{$Q}(?:{$ROOTS}|{$DOTDOT})$T",
+    'smartctl option that changes device state (SMART on/off, offline auto, saveauto, abort, --set, scterc timers)' =>
+        "{$B}smartctl\\s+(?:[^;&|]*\\s)?(?:{$SMART_STATE}|-l\\s+scterc,[0-9])",
+];
+
+// Patterns are full of slashes, so the delimiter is a control character that
+// can never appear in them. The m flag makes ^ and $ work per line, like the
+// line-based grep the rules were written for (a newline separates commands).
+const D = "\x01";
+const DM = "\x01m";
+
+foreach ($blockRules as $label => $re) {
+    if (preg_match(D . $re . DM, $norm)) {
+        block($label);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ask tier: legitimate sometimes, but exactly what an injected instruction
+// would ask for. Rare false positives only cost one extra prompt.
+// ---------------------------------------------------------------------------
+$NET = '(?:curl|wget|nc|ncat|netcat|socat|ssh|scp|sftp|telnet|smbclient)';
+$CMD_START = "(?:^|[;&|(]|\\\$\\(|{$B}(?:sudo|exec|nohup|command|env)\\s+)\\s*";
+$NET_CALL = "(?:[\\s\"']{$NET}$T|{$CMD_START}(?:/[^\\s\"']*/)?{$NET}$T)";
+$SH = '(?:ba|da|z)?sh';
+// Command position for the host-level rules: start of a command or right after
+// a wrapper, optionally through `sh -c` (or -ec, -lc), by path, or through busybox.
+$INVOKE = "{$CMD_START}(?:{$SH}\\s+-[a-z]*c\\s+)?{$Q}(?:/[^\\s\"']*/)?(?:busybox\\s+)?";
+// Tools that write a file at a given path; shared by the flash, cron and policy rules.
+$WRITE_VERBS = '(?:cp|mv|rsync|install|ln|tee|rm|mkdir|touch|truncate|chmod|chown|sed|tar|unzip|dd|curl|wget|cd|find|xargs|patch|python3?|php|perl)';
+// A remote rsync target: user@host:, host:/path, or rsync:/ (// already collapsed).
+$RSYNC_REMOTE = "rsync\\s+[^;&|]*(?:@|rsync:/|\\s[^\\s/\"']+:[^\\s]*)";
+// The flash drive as a path operand.
+$FLASH = "/boot(?:/|$T)";
+$DOCKER_HOSTY = "(?:--privileged|--pid[= ]host|--net(?:work)?[= ]host|--ipc[= ]host|--userns[= ]host|--cap-add|--security-opt|(?:-v|--volume)(?:\\s*|=)[\"']?/(?::|boot[:/])|--mount\\s*[^\\s]*(?:source|src)=/(?:,|boot(?:[,/\"'\\s]|$))|docker\\.sock)";
+// The plugin's own files: the policy, the launcher and helper, the installed binary.
+$PLUGIN_PATHS = '/(?:etc/claude-code|usr/local/bin/claude(?:-unraid)?|usr/local/emhttp/plugins/' . PLUGIN . '|usr/local/lib/' . PLUGIN . ')';
+$FLASH_TOUCH = "(?:>>?\\s*{$Q}{$FLASH}|{$B}{$WRITE_VERBS}\\s+[^;&|]*{$Q}{$FLASH})";
+
+$askRules = [
+    'downloads and runs code from the network' =>
+        "(?:(?:curl|wget)[^|;&]*\\|\\s*(?:sudo\\s+)?{$SH}$T|{$SH}\\s+-c\\s+{$Q}\\\$\\((?:curl|wget)|<\\((?:curl|wget))",
+    'decodes and runs hidden code' =>
+        "base64\\s+(?:-d|--decode)[^|;&]*\\|\\s*(?:sudo\\s+)?{$SH}$T",
+    'reaches the network (possible data exfiltration)' =>
+        "(?:{$NET_CALL}|{$B}{$RSYNC_REMOTE})",
+    'starts a container with host-level access' =>
+        "{$B}docker\\s+(?:run|create)[^;&|]*{$DOCKER_HOSTY}",
+    'deletes container data' =>
+        "(?:{$B}docker\\s+(?:rm|rmi|system\\s+prune|(?:volume|image|container|network)\\s+(?:rm|prune))$T|{$B}docker\\s+compose\\s+down[^;&|]*\\s(?:-v|--volumes)$T)",
+    'destroys storage snapshots or datasets' =>
+        "(?:{$B}zfs\\s+(?:destroy|rollback)$T|{$B}btrfs\\s+subvolume\\s+delete$T)",
+    'changes mounts or namespaces (could undo the read-only flash drive)' =>
+        "{$INVOKE}(?:mount|umount|nsenter|unshare|chroot)$T",
+    'starts or restarts a host service' =>
+        "{$INVOKE}(?:etc/rc\\.d/rc\\.[^\\s]+|service|systemctl|rc\\.[[:alnum:].-]+)$T",
+    'hands work to a host daemon (cron, at and emhttpd run outside this session)' =>
+        "(?:{$INVOKE}(?:crontab(?:\\s+-u\\s+[^-\\s][^\\s]*)?(?:\\s+(?:-[^lu\\s]|-l[^\\s]|[^-\\s]|-$T)|\\s*(?:[;&|<>)\"']|$))|at\\s+(?:-|now|noon|midnight|teatime|tomorrow|next|[0-9]{1,2}(?::[0-9]{2}|\\s*[ap]m))|batch(?:\\s+-|\\s*(?:[;&|<>)\"']|$))|emcmd$T)|(?:>>?\\s*|{$B}{$WRITE_VERBS}\\s+[^;&|]*){$Q}/(?:etc/cron|var/spool/cron))",
+    'installs, removes or updates an Unraid plugin' =>
+        "{$INVOKE}plugin\\s+(?:install|remove|update|updateall)$T",
+    'modifies the Claude Code policy, launcher or binary that enforce this session\'s rules' =>
+        "(?:>>?\\s*{$Q}{$PLUGIN_PATHS}|{$B}{$WRITE_VERBS}\\s+[^;&|]*{$Q}{$PLUGIN_PATHS})",
+    'runs a SMART self-test (safe, but it can take hours and slows the disk)' =>
+        "{$B}smartctl\\s+(?:[^;&|]*\\s)?(?:-t|--test)(?:[=\\s]|$)",
+];
+
+foreach ($askRules as $label => $re) {
+    if (preg_match(D . $re . DM, $norm)) {
+        ask($label);
+    }
+}
+
+// Last, so that a more specific reason (network, deletion) wins over this one.
+// The kernel enforces the read-only flash drive in normal sessions; this rule
+// only adds a reason when the drive is writable (a --boot-rw session).
+if (preg_match(D . $FLASH_TOUCH . DM, $norm) && bootMode() === 'rw') {
+    ask('touches the Unraid flash drive, which is writable in this session');
+}
+
+exit(0);

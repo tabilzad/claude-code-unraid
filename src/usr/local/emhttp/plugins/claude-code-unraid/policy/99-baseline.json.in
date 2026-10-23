@@ -1,0 +1,126 @@
+{
+  "_comment": "Claude Code for Unraid: managed policy baseline. Rendered by scripts/install-policy into /etc/claude-code/managed-settings.d/99-claude-code-unraid-baseline.json at install and on every boot. It loads last, so its locks win; user drop-ins (50-user-*.json) can add allow/deny rules but cannot weaken these. Edit the template in the plugin repository, not the rendered file.",
+  "permissions": {
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Bash(mkfs*)",
+      "Bash(wipefs*)",
+      "Bash(shred *)",
+      "Bash(sgdisk --zap*)",
+      "Bash(zpool destroy *)",
+      "Bash(zpool labelclear *)",
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf /mnt)",
+      "Bash(rm -rf /mnt/*)",
+      "Bash(rm -rf /boot)",
+      "Bash(rm -rf /boot/*)"
+    ],
+    "allow": [
+      "Bash(smartctl -a *)",
+      "Bash(smartctl -x *)",
+      "Bash(smartctl -H *)",
+      "Bash(smartctl -i *)",
+      "Bash(smartctl -l error *)",
+      "Bash(smartctl -l xerror *)",
+      "Bash(smartctl -l selftest *)",
+      "Bash(smartctl -l xselftest *)",
+      "Bash(smartctl -l devstat *)",
+      "Bash(smartctl -l scttemp *)",
+      "Bash(smartctl -l scterc *)",
+      "Bash(smartctl --scan)",
+      "Bash(zpool status *)",
+      "Bash(zpool list *)",
+      "Bash(zpool iostat *)",
+      "Bash(zfs list *)",
+      "Bash(zfs get *)",
+      "Bash(btrfs filesystem show *)",
+      "Bash(btrfs filesystem usage *)",
+      "Bash(btrfs filesystem df *)",
+      "Bash(btrfs device stats *)",
+      "Bash(btrfs scrub status *)",
+      "Bash(iostat *)",
+      "Bash(cat /proc/diskstats)",
+      "Bash(cat /proc/mdstat)",
+      "Bash(cat /proc/meminfo)",
+      "Bash(cat /proc/loadavg)",
+      "Bash(df *)",
+      "Bash(free *)",
+      "Bash(uptime)",
+      "Bash(lsblk *)",
+      "Bash(lscpu)",
+      "Bash(sensors)",
+      "Bash(docker ps *)",
+      "Bash(docker stats --no-stream *)",
+      "Bash(docker images *)",
+      "Bash(docker version)",
+      "Bash(docker info)",
+      "Bash(dmesg *)",
+      "Bash(mdcmd status)",
+      "Bash(virsh list *)",
+      "Bash(ip -br addr)",
+      "Bash(ip -br link)",
+      "Bash(ip addr)",
+      "Bash(ip route)",
+      "Bash(claude-unraid status)",
+      "Bash(claude-unraid status *)",
+      "Bash(claude-unraid doctor)"
+    ]
+  },
+  "disableAutoMode": "disable",
+  "disableRemoteControl": true,
+  "cleanupPeriodDays": 90,
+  "env": {
+    "DISABLE_UPDATES": "1",
+    "DISABLE_AUTOUPDATER": "1"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/emhttp/plugins/claude-code-unraid/policy/guard",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/emhttp/plugins/claude-code-unraid/policy/audit",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/emhttp/plugins/claude-code-unraid/policy/session-hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/emhttp/plugins/claude-code-unraid/policy/session-hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

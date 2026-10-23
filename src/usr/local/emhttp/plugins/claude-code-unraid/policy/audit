@@ -1,0 +1,90 @@
+#!/usr/bin/env php
+<?php
+/*
+ * audit: PostToolUse hook. One syslog line per tool call, never the output.
+ *
+ *   logger -t claude-code-unraid-audit -- session=<id> cwd=<cwd> tool=<name> [cmd=<...>|path=<...>]
+ *
+ * For Bash the command is truncated to 300 characters and obvious secrets are
+ * redacted first: --password=..., token=..., api keys, Authorization headers,
+ * Bearer tokens, AWS access key ids, Anthropic/OpenAI/GitHub/Slack key shapes
+ * and user:password@ in URLs. For file tools the path is logged. Tool output
+ * is never read. Nothing here can block or fail Claude: every path exits 0.
+ */
+declare(strict_types=1);
+
+const TAG = 'claude-code-unraid-audit';
+const MAX_CMD = 300;
+
+set_error_handler(static function (): never {
+    exit(0);
+});
+
+function redact(string $s): string
+{
+    $rules = [
+        '/(--?(?:password|passwd|pass|pw|secret|api[_-]?key|token|auth)(?:=|\s+))(["\']?)\S+/i' => '$1$2[redacted]',
+        '/(\b(?:password|passwd|secret|api[_-]?key|access[_-]?key|token)\s*[=:]\s*)(["\']?)[^\s"\']+/i' => '$1$2[redacted]',
+        '/(Authorization\s*:\s*)(?:\S+\s+)?\S+/i' => '$1[redacted]',
+        '/(\bBearer\s+)\S+/i' => '$1[redacted]',
+        '/AKIA[0-9A-Z]{16}/' => '[redacted-aws-key-id]',
+        '/sk-ant-[A-Za-z0-9_\-]{10,}/' => '[redacted-anthropic-key]',
+        '/\bsk-[A-Za-z0-9_\-]{20,}/' => '[redacted-api-key]',
+        '/\bgh[pousr]_[A-Za-z0-9]{20,}/' => '[redacted-github-token]',
+        '/\bxox[baprs]-[A-Za-z0-9\-]{10,}/' => '[redacted-slack-token]',
+        '#(://[^/\s:@]+:)[^@\s/]+@#' => '$1[redacted]@',
+    ];
+    foreach ($rules as $re => $rep) {
+        $s = preg_replace($re, $rep, $s) ?? $s;
+    }
+    return $s;
+}
+
+function oneLine(string $s): string
+{
+    $s = preg_replace('/[\x00-\x1f\x7f]+/', ' ', $s) ?? $s;
+    return trim($s);
+}
+
+function truncate(string $s): string
+{
+    if (mb_strlen($s, 'UTF-8') <= MAX_CMD) {
+        return $s;
+    }
+    $extra = mb_strlen($s, 'UTF-8') - MAX_CMD;
+    return mb_substr($s, 0, MAX_CMD, 'UTF-8') . "...[+$extra chars]";
+}
+
+$raw = stream_get_contents(STDIN);
+if ($raw === false || trim($raw) === '') {
+    exit(0);
+}
+try {
+    $input = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
+} catch (JsonException) {
+    exit(0);
+}
+if (!is_array($input)) {
+    exit(0);
+}
+
+$session = preg_replace('/[^A-Za-z0-9_\-]/', '', (string) ($input['session_id'] ?? '')) ?? '';
+$cwd = oneLine((string) ($input['cwd'] ?? ''));
+$tool = preg_replace('/[^A-Za-z0-9_\-:.]/', '', (string) ($input['tool_name'] ?? '')) ?? '';
+$toolInput = is_array($input['tool_input'] ?? null) ? $input['tool_input'] : [];
+
+$line = sprintf('session=%s cwd=%s tool=%s', $session !== '' ? $session : '-', $cwd !== '' ? $cwd : '-', $tool !== '' ? $tool : '-');
+if ($tool === 'Bash' || $tool === 'PowerShell') {
+    $cmd = truncate(redact(oneLine((string) ($toolInput['command'] ?? ''))));
+    $line .= ' cmd=' . $cmd;
+} else {
+    $path = (string) ($toolInput['file_path'] ?? $toolInput['notebook_path'] ?? $toolInput['path'] ?? $toolInput['url'] ?? $toolInput['pattern'] ?? '');
+    if ($path !== '') {
+        $line .= ' path=' . truncate(redact(oneLine($path)));
+    }
+}
+
+// logger is on PATH on Unraid; a missing logger must not matter.
+$argv_ = ['logger', '-t', TAG, '--', $line];
+exec(implode(' ', array_map('escapeshellarg', $argv_)) . ' 2>/dev/null');
+exit(0);

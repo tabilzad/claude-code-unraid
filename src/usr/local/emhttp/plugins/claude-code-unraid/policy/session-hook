@@ -1,0 +1,12 @@
+#!/usr/bin/env php
+<?php
+/*
+ * session-hook: SessionStart and SessionEnd hook.
+ *
+ * Placeholder until the sessions phase implements the registry. It swallows
+ * its input and exits 0 so that it can never block or slow down a session.
+ */
+declare(strict_types=1);
+
+@stream_get_contents(STDIN);
+exit(0);

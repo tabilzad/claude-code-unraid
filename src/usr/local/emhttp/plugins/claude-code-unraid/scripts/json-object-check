@@ -1,0 +1,21 @@
+#!/usr/bin/env php
+<?php
+/*
+ * json-object-check FILE: exit 0 when FILE is valid JSON whose top level is an
+ * object and that is at most 1 MiB, exit 1 otherwise. Used before anything is
+ * written to /etc/claude-code, because a managed drop-in that fails this test
+ * makes Claude Code refuse to start.
+ */
+declare(strict_types=1);
+
+$file = $argv[1] ?? '';
+$raw = $file === '' ? false : @file_get_contents($file);
+if ($raw === false || strlen($raw) > 1048576) {
+    exit(1);
+}
+try {
+    $data = json_decode($raw, true, 32, JSON_THROW_ON_ERROR);
+} catch (Throwable) {
+    exit(1);
+}
+exit(is_array($data) && !array_is_list($data) ? 0 : 1);
