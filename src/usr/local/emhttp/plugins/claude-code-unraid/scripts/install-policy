@@ -1,0 +1,6 @@
+#!/bin/bash
+# install-policy: placeholder until phase 04 implements it. Always exits 0 so the
+# plugin install never fails because of a missing feature.
+set -euo pipefail
+echo "claude-code-unraid: install-policy: not implemented yet"
+exit 0

@@ -26,3 +26,16 @@ jobs:
 
       - name: Run make check inside the pinned dev image
         run: ./scripts/dev-env make check
+
+  e2e-install:
+    name: plugin manager install test (Docker dev-env, root)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install, reboot, corrupt-cache, remove and LOCAL scenarios
+        run: ./scripts/dev-env --root make e2e-install

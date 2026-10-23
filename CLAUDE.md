@@ -65,12 +65,16 @@ src/                     # files packaged into the .txz, rooted at /
   usr/local/emhttp/plugins/PLUGIN/   # pages, php, scripts, event/, policy/
   usr/local/bin/                     # claude launcher, claude-unraid helper
 plugin/PLUGIN.plg.in     # plg template; rendered by scripts/render-plg
+plugin/slack-desc        # Slackware package description packed into the txz
 release/claude-code.lock # pinned Claude Code version + verified sha256 (CI-owned)
+release/tmux.lock        # pinned Slackware tmux package (hand-verified, see SPIKE)
 keys/                    # Anthropic release signing key (fingerprint pinned in code)
-scripts/                 # build, render, lint, release, claude-release
-tests/                   # bats + php tests; tests/e2e/ for the emulated host
+scripts/                 # build-txz, render-plg, lint-plg, plugin-version, claude-release, dev-env
+tests/bats, tests/php    # unit tests; tests/helpers/ fixtures; tests/fixtures/ golden files
+tests/e2e/               # plugin-manager and emulated-host scenarios (run as root in dev-env)
+tests/vendor/unraid/     # Lime's plugin manager script, test-only (GPLv2)
 ca/                      # CA plugin template XML, ca_profile.xml
-docs/                    # SPEC, SPIKE, SECURITY, TESTING, user docs
+docs/                    # SPEC, SPIKE, SECURITY, TESTING, RELEASING, user docs
 ```
 
 ## Coding conventions

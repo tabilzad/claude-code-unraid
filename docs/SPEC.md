@@ -41,7 +41,7 @@ degrade where not.
 | Path | Persistence | Contents |
 |---|---|---|
 | `/boot/config/plugins/PLUGIN.plg` | flash | installed plg |
-| `/boot/config/plugins/PLUGIN/` | flash | `PLUGIN.cfg`, `pkg/PLUGIN-<ver>.txz`, `pkg/tmux-<pkgver>.txz`, `bin/claude-<cver>` (current plus previous only), `policy.d/*.json` (user drop-ins), `emergency-token` (opt-in) |
+| `/boot/config/plugins/PLUGIN/` | flash | `PLUGIN.cfg`, `pkg/PLUGIN-<ver>-noarch-1.txz` (Slackware naming, so `upgradepkg` recognises the package; a dev build is `0000.00.00.0_dev`), `pkg/tmux-<pkgver>.txz`, `bin/claude-<cver>` (current plus previous only), `policy.d/*.json` (user drop-ins), `emergency-token` (opt-in) |
 | `/usr/local/emhttp/plugins/PLUGIN/` | RAM (from txz) | page, php, `scripts/`, `event/`, `policy/` (baseline), `README.md` |
 | `/usr/local/lib/PLUGIN/claude-<cver>` | RAM | binary copied from flash after verification (never exec from FAT) |
 | `/usr/local/lib/PLUGIN/bin/tmux` | RAM | `usr/bin/tmux` extracted from the verified Slackware package |
@@ -76,7 +76,8 @@ degrade where not.
 
 ## 5. Lifecycle flows
 
-- **Install / every boot (plg `Method="install"`):** create dirs; `upgradepkg --install-new` the cached txz; install the policy baseline (section 9); run the binary install (section 4); run the tmux install; `post-install` writes `/run/PLUGIN/mode=fallback` unless a mode already exists, and logs a summary. No `/mnt` access here, except that `post-install` runs the `disks_mounted` logic once, inline and bounded, when the array is already started (`mdState=STARTED` in `/var/local/emhttp/var.ini`) so that installing while the array runs lands in pool mode.
+- **Plugin version:** `YYYY.MM.DD.N`, fixed width because the plugin manager compares versions with `strcmp`: the UTC date of the release tag and a single sequence digit (the tag's position among the tags created that day; a tenth release in one day is an error). Dev builds are `0000.00.00.0-dev`, which sorts below every release. The semantic version lives in the tag (`v0.1.0-beta.1`) and in the `pluginVersion` entity.
+- **Install / every boot (plg `Method="install"`):** create dirs; `upgradepkg --install-new --reinstall` the cached txz (this is the only step allowed to fail the install, since nothing works without the package); install the policy baseline (section 9); run the binary install (section 4); run the tmux install; `post-install` writes `/run/PLUGIN/mode=fallback` unless a mode already exists, and logs a summary. No `/mnt` access here, except that `post-install` runs the `disks_mounted` logic once, inline and bounded, when the array is already started (`mdState=STARTED` in `/var/local/emhttp/var.ini`) so that installing while the array runs lands in pool mode.
 - **Update:** same as install, plus restart supervised sessions only if the Claude version changed and the user enabled auto-restart.
 - **Remove (`Method="remove"`):**
   - stop supervised sessions

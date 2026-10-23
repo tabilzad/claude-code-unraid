@@ -1,0 +1,5 @@
+# fixture tmux lock for render-plg tests
+TMUX_PKG=tmux-3.2a-x86_64-1.txz
+TMUX_URL=https://mirrors.slackware.com/slackware/slackware64-15.0/slackware64/ap/tmux-3.2a-x86_64-1.txz
+TMUX_SHA256=c54aaafd013b09ade3ffbdc553b64b9a29835bc717435982defced205a6772b9
+TMUX_SIZE=366896

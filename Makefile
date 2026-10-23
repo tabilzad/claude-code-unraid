@@ -32,9 +32,17 @@ lint-php:
 	@echo "php -l ($(words $(PHP_FILES)) files)"
 	@for f in $(PHP_FILES); do php -l "$$f" > /dev/null || exit 1; done
 
-# The template appears in phase 03; until then there is nothing to lint.
+# Render the template with dev values, then check it with xmllint (entity
+# expansion) and our own rules.
 lint-plg:
-	@if [ -f "$(PLG_TEMPLATE)" ]; then ./scripts/lint-plg "$(PLG_TEMPLATE)"; else echo "lint-plg: no template yet, skipped"; fi
+	@echo "lint-plg"
+	@mkdir -p .tmp/lint
+	@./scripts/render-plg --version 0000.00.00.0-dev --plugin-version 0.0.0-dev \
+	  --txz-name $(PLUGIN)-0000.00.00.0_dev-noarch-1.txz \
+	  --txz-sha256 0000000000000000000000000000000000000000000000000000000000000000 \
+	  --out .tmp/lint/$(PLUGIN).plg > /dev/null
+	xmllint --noent --noout .tmp/lint/$(PLUGIN).plg
+	./scripts/lint-plg .tmp/lint/$(PLUGIN).plg
 
 lint-workflows:
 	@if command -v actionlint > /dev/null 2>&1; then echo "actionlint"; actionlint; else echo "lint-workflows: actionlint not installed, skipped"; fi
@@ -48,8 +56,24 @@ test-bats:
 test-php:
 	php tests/php/run.php
 
+# make build                      -> dist/<pkg>.txz + dist/claude-code-unraid.plg (dev version)
+# make build VERSION=2026.10.23.1 PLUGIN_VERSION=0.1.0 TXZ_URL=https://.../pkg.txz
+VERSION        ?= 0000.00.00.0-dev
+PLUGIN_VERSION ?= 0.0.0-dev
+TXZ_URL        ?=
+DIST           ?= dist
+
 build:
-	@echo "build: implemented in phase 03"
+	@txz="$$(./scripts/build-txz --version $(VERSION) --out-dir $(DIST))" && \
+	  ./scripts/render-plg --version $(VERSION) --plugin-version $(PLUGIN_VERSION) \
+	    --txz "$$txz" $(if $(TXZ_URL),--txz-url $(TXZ_URL),) --out $(DIST)/$(PLUGIN).plg && \
+	  ./scripts/lint-plg $(DIST)/$(PLUGIN).plg && \
+	  ls -la $(DIST)
+
+# Runs Lime's real plugin manager against the rendered plg inside the dev
+# container (needs root in the container: ./scripts/dev-env --root make e2e-install).
+e2e-install:
+	tests/e2e/plg-install.sh
 
 fmt:
 	shfmt -i 2 -ci -w $(SH_FILES)

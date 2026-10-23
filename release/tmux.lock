@@ -1,0 +1,9 @@
+# tmux package bundled by the plugin (extracted into /usr/local/lib/claude-code-unraid/bin).
+# Source: Slackware 15.0 release tree (frozen; URLs there never change).
+# Verified 2026-10-22: tmux-3.2a-x86_64-1.txz.asc is a VALIDSIG by the Slackware
+# Linux Project key EC5649DA401E22ABFA6736EF6A4463C040102233 (docs/SPIKE.md section 12).
+# Edit only after re-verifying the signature; the box checks TMUX_SHA256 before extracting.
+TMUX_PKG=tmux-3.2a-x86_64-1.txz
+TMUX_URL=https://mirrors.slackware.com/slackware/slackware64-15.0/slackware64/ap/tmux-3.2a-x86_64-1.txz
+TMUX_SHA256=c54aaafd013b09ade3ffbdc553b64b9a29835bc717435982defced205a6772b9
+TMUX_SIZE=366896

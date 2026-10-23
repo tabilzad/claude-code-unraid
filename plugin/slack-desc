@@ -1,0 +1,19 @@
+# HOW TO EDIT THIS FILE:
+# The "handy ruler" below makes it easier to edit a package description.
+# Line up the first '|' above the ':' following the base package name, and
+# the '|' on the right side marks the last column you can put a character in.
+# You must make exactly 11 lines for the formatting to be correct.  It's also
+# customary to leave one space after the ':' except on otherwise blank lines.
+
+                  |-----handy-ruler------------------------------------------------------|
+claude-code-unraid: claude-code-unraid (Claude Code for Unraid)
+claude-code-unraid:
+claude-code-unraid: Unraid plugin that installs the Claude Code CLI on the host, keeps
+claude-code-unraid: its login, settings and sessions across reboots, restores sessions
+claude-code-unraid: after the array starts and enforces a managed security policy.
+claude-code-unraid:
+claude-code-unraid: Not affiliated with Anthropic or Lime Technology. Claude Code is
+claude-code-unraid: downloaded from Anthropic's release servers at install time and is
+claude-code-unraid: never redistributed by this package.
+claude-code-unraid:
+claude-code-unraid: https://github.com/tabilzad/claude-code-unraid

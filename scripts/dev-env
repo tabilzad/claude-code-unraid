@@ -8,7 +8,16 @@
 #
 # Only Docker is required on the host. Set DEV_ENV_DOCKER_ARGS to pass extra
 # flags to `docker run` (for example "--privileged" for namespace tests).
+# `--root` as the first argument runs the command as root inside the container
+# (needed by the end-to-end tests, which install the package into the
+# container's own filesystem).
 set -euo pipefail
+
+as_root=0
+if [ "${1:-}" = "--root" ]; then
+  as_root=1
+  shift
+fi
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 dockerfile="$repo/scripts/devenv/Dockerfile"
@@ -43,10 +52,12 @@ if [ -t 0 ] && [ -t 1 ]; then
 else
   args+=(-i)
 fi
-case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*) ;;
-  *) args+=(--user "$(id -u):$(id -g)") ;;
-esac
+if [ "$as_root" = 0 ]; then
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) ;;
+    *) args+=(--user "$(id -u):$(id -g)") ;;
+  esac
+fi
 if [ -n "${DEV_ENV_DOCKER_ARGS:-}" ]; then
   # shellcheck disable=SC2206 # intentional word splitting of user-provided flags
   args+=($DEV_ENV_DOCKER_ARGS)

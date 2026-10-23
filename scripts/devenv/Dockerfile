@@ -66,6 +66,27 @@ RUN set -eux; \
     \
     shellcheck --version; shfmt --version; bats --version; actionlint --version; php --version
 
+# Slackware pkgtools (installpkg, upgradepkg, removepkg, makepkg, explodepkg)
+# from the frozen 15.0 release tree, so the package can be installed exactly
+# the way Unraid installs it. The scripts are bash and only need tar and xz.
+# Verified 2026-10-22 against the Slackware Linux Project signing key
+# (docs/SPIKE.md section 12); the sha256 below pins what was verified.
+ARG PKGTOOLS_PKG=pkgtools-15.0-noarch-42.txz
+ARG PKGTOOLS_SHA256=472e18ebf561ccc2fa734db8d19101220b5d790012d0688d92009d99e87595f5
+RUN set -eux; \
+    cd /tmp; \
+    curl -fsSL --retry 3 -o pkgtools.txz \
+      "https://mirrors.slackware.com/slackware/slackware64-15.0/slackware64/a/${PKGTOOLS_PKG}"; \
+    echo "${PKGTOOLS_SHA256}  pkgtools.txz" | sha256sum -c -; \
+    mkdir pkgtools; \
+    tar -xJf pkgtools.txz -C pkgtools sbin/installpkg sbin/upgradepkg sbin/removepkg sbin/makepkg sbin/explodepkg; \
+    install -m 0755 pkgtools/sbin/* /sbin/; \
+    rm -rf pkgtools pkgtools.txz; \
+    installpkg --help 2>&1 | head -n 2
+
+# The repository is bind-mounted and may be owned by another uid.
+RUN git config --system --add safe.directory '*'
+
 # A writable HOME for whatever uid runs the container (CI runners are not root).
 RUN mkdir -p /tmp/home && chmod 1777 /tmp/home
 ENV HOME=/tmp/home

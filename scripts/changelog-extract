@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# changelog-extract: print sections of CHANGELOG.md (Keep a Changelog format).
+#
+#   changelog-extract --latest N [--file CHANGELOG.md]
+#       The first N "## [...]" sections, headings included.
+#   changelog-extract --version X [--file CHANGELOG.md]
+#       The body of the "## [X]" section (heading excluded). Exit 1 if absent.
+#   changelog-extract --unreleased-as X
+#       Like --latest 1 but with the "[Unreleased]" heading rewritten to "[X]".
+set -euo pipefail
+
+die() {
+  printf 'changelog-extract: %s\n' "$*" >&2
+  exit 1
+}
+
+file=CHANGELOG.md
+mode=""
+arg=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --file)
+      file=${2:-}
+      shift 2
+      ;;
+    --latest)
+      mode=latest
+      arg=${2:-}
+      shift 2
+      ;;
+    --version)
+      mode=version
+      arg=${2:-}
+      shift 2
+      ;;
+    --unreleased-as)
+      mode=unreleased
+      arg=${2:-}
+      shift 2
+      ;;
+    *) die "unknown argument '$1'" ;;
+  esac
+done
+[ -n "$mode" ] || die "one of --latest, --version or --unreleased-as is required"
+[ -r "$file" ] || die "cannot read $file"
+
+case "$mode" in
+  latest)
+    [[ "$arg" =~ ^[1-9][0-9]*$ ]] || die "--latest needs a positive number"
+    awk -v n="$arg" '
+      /^## \[/ { count++ }
+      count > 0 && count <= n { print }
+    ' "$file"
+    ;;
+  version)
+    [ -n "$arg" ] || die "--version needs a value"
+    awk -v v="$arg" '
+      /^## \[/ { if (printing) exit; if ($0 ~ ("^## \\[" v "\\]")) { printing = 1; found = 1; next } }
+      printing { print }
+      END { if (!found) exit 1 }
+    ' "$file" || die "no section for version $arg in $file"
+    ;;
+  unreleased)
+    [ -n "$arg" ] || die "--unreleased-as needs a value"
+    awk -v v="$arg" '
+      /^## \[/ { count++ }
+      count == 1 { sub(/^## \[Unreleased\]/, "## [" v "]"); print }
+    ' "$file"
+    ;;
+esac

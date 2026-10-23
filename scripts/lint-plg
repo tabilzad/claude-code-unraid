@@ -1,0 +1,307 @@
+#!/usr/bin/env php
+<?php
+/*
+ * lint-plg: static checks for a rendered .plg before it is published.
+ *
+ *   lint-plg [--lock FILE] [--tmux-lock FILE] [--no-lock] FILE.plg
+ *
+ * Fails (exit 1, one line per problem) on any of:
+ *   - XML that is not well-formed after entity expansion
+ *   - an undefined, unused or duplicate entity, or a bare "&"
+ *   - a <FILE> with <URL> but no <SHA256>, with <MD5>, with a target outside
+ *     /boot/config/plugins/claude-code-unraid/, with a non-https URL, or with a
+ *     URL that is not the plugin's own package (the Claude binary and tmux are
+ *     fetched by package scripts, never by the plugin manager: invariant 3)
+ *   - a <FILE> with <LOCAL> (test-only construct)
+ *   - an INLINE that is not run by /bin/bash, mentions /mnt, or downloads
+ *   - missing or malformed PLUGIN attributes (name, author, version, pluginURL,
+ *     min, support)
+ *   - an empty CHANGES block
+ *   - the pinned claudeSHA256/claudeVersion/claudeURL or tmux entities not
+ *     matching the lock files
+ *
+ * The parser is SimpleXML with entity substitution, the same library the
+ * Unraid plugin manager uses.
+ */
+declare(strict_types=1);
+
+const PLUGIN = 'claude-code-unraid';
+const FLASH_DIR = '/boot/config/plugins/' . PLUGIN . '/';
+
+$repoRoot = dirname(__DIR__);
+$lock = "$repoRoot/release/claude-code.lock";
+$tmuxLock = "$repoRoot/release/tmux.lock";
+$checkLocks = true;
+$file = null;
+$args = array_slice($argv, 1);
+while ($args !== []) {
+    $arg = array_shift($args);
+    switch ($arg) {
+        case '--lock':
+            $lock = array_shift($args) ?? '';
+            break;
+        case '--tmux-lock':
+            $tmuxLock = array_shift($args) ?? '';
+            break;
+        case '--no-lock':
+            $checkLocks = false;
+            break;
+        default:
+            if ($file !== null || str_starts_with($arg, '--')) {
+                fwrite(STDERR, "lint-plg: unexpected argument $arg\n");
+                exit(2);
+            }
+            $file = $arg;
+    }
+}
+if ($file === null) {
+    fwrite(STDERR, "usage: lint-plg [--lock FILE] [--tmux-lock FILE] [--no-lock] FILE.plg\n");
+    exit(2);
+}
+
+/** @var list<string> $errors */
+$errors = [];
+function problem(string $msg): void
+{
+    global $errors;
+    $errors[] = $msg;
+}
+
+$raw = @file_get_contents($file);
+if ($raw === false) {
+    fwrite(STDERR, "lint-plg: cannot read $file\n");
+    exit(1);
+}
+
+// --- entities --------------------------------------------------------------
+preg_match_all('/<!ENTITY\s+([A-Za-z_][\w.-]*)\s+"([^"]*)"\s*>/', $raw, $m, PREG_SET_ORDER);
+/** @var array<string,string> $entities */
+$entities = [];
+foreach ($m as [, $name, $value]) {
+    if (isset($entities[$name])) {
+        problem("entity '$name' is defined twice");
+    }
+    $entities[$name] = $value;
+}
+$predefined = ['amp', 'lt', 'gt', 'quot', 'apos'];
+preg_match_all('/&([A-Za-z_][\w.-]*);/', $raw, $refs);
+$referenced = array_unique($refs[1]);
+foreach ($referenced as $name) {
+    if (!in_array($name, $predefined, true) && !isset($entities[$name])) {
+        problem("entity '$name' is referenced but not defined");
+    }
+}
+foreach ($entities as $name => $value) {
+    if (!in_array($name, $referenced, true)) {
+        problem("entity '$name' is defined but never used");
+    }
+    if (trim($value) === '' && $name !== 'changes') {
+        problem("entity '$name' is empty");
+    }
+}
+if (preg_match_all('/&(?![A-Za-z_][\w.-]*;|#[0-9]+;|#x[0-9A-Fa-f]+;)/', $raw, $bare) > 0) {
+    problem('bare "&" found ' . count($bare[0]) . ' time(s); write &amp; (or an entity reference)');
+}
+
+/** Expand entity references the way the XML parser would, for raw scans. */
+function expand(string $s, array $entities): string
+{
+    for ($i = 0; $i < 10; $i++) {
+        $before = $s;
+        $s = preg_replace_callback(
+            '/&([A-Za-z_][\w.-]*);/',
+            static fn (array $mm): string => $entities[$mm[1]] ?? $mm[0],
+            $s
+        ) ?? $s;
+        if ($s === $before) {
+            break;
+        }
+    }
+    return $s;
+}
+
+// --- XML -------------------------------------------------------------------
+libxml_use_internal_errors(true);
+$xml = simplexml_load_string($raw, 'SimpleXMLElement', LIBXML_NOCDATA | LIBXML_NOENT | LIBXML_NONET);
+if ($xml === false) {
+    foreach (libxml_get_errors() as $e) {
+        problem(sprintf('XML: line %d: %s', $e->line, trim($e->message)));
+    }
+    libxml_clear_errors();
+    report();
+}
+if ($xml->getName() !== 'PLUGIN') {
+    problem('root element must be PLUGIN');
+}
+
+// --- PLUGIN attributes -----------------------------------------------------
+$attrs = [];
+foreach ($xml->attributes() as $k => $v) {
+    $attrs[(string) $k] = (string) $v;
+}
+foreach (['name', 'author', 'version', 'pluginURL', 'min', 'support'] as $required) {
+    if (!isset($attrs[$required]) || trim($attrs[$required]) === '') {
+        problem("PLUGIN attribute '$required' is missing or empty");
+    }
+}
+if (($attrs['name'] ?? '') !== PLUGIN) {
+    problem(sprintf("PLUGIN name must be '%s', found '%s'", PLUGIN, $attrs['name'] ?? ''));
+}
+if (isset($attrs['version']) && !preg_match('/^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9](-dev)?$/', $attrs['version'])) {
+    problem("PLUGIN version must be YYYY.MM.DD.N (or 0000.00.00.0-dev), found '{$attrs['version']}'");
+}
+if (isset($attrs['min']) && !preg_match('/^[0-9]+\.[0-9]+\.[0-9]+$/', $attrs['min'])) {
+    problem("PLUGIN min must be an Unraid version, found '{$attrs['min']}'");
+}
+foreach (['pluginURL', 'support'] as $urlAttr) {
+    if (isset($attrs[$urlAttr]) && !preg_match('#^https://#', $attrs[$urlAttr])) {
+        problem("PLUGIN $urlAttr must be an https URL");
+    }
+}
+if (isset($attrs['pluginURL']) && !str_ends_with($attrs['pluginURL'], '/' . PLUGIN . '.plg')) {
+    problem('PLUGIN pluginURL must end with /' . PLUGIN . '.plg');
+}
+
+// --- CHANGES ---------------------------------------------------------------
+$changes = trim((string) ($xml->CHANGES ?? ''));
+if ($changes === '') {
+    problem('CHANGES is empty');
+} elseif (!str_starts_with($changes, '##' . PLUGIN)) {
+    problem('CHANGES must start with ##' . PLUGIN);
+}
+
+// --- FILE elements ---------------------------------------------------------
+$fileCount = 0;
+$urlFiles = 0;
+$removeSteps = 0;
+foreach ($xml->FILE as $f) {
+    $fileCount++;
+    $name = (string) ($f['Name'] ?? '');
+    $run = (string) ($f['Run'] ?? '');
+    $method = (string) ($f['Method'] ?? 'install');
+    $label = $name !== '' ? $name : "FILE #$fileCount";
+    $hasUrl = isset($f->URL);
+    $hasInline = isset($f->INLINE);
+
+    if (isset($f->LOCAL)) {
+        problem("$label: LOCAL files are test-only and must not appear in a release plg");
+    }
+    if (isset($f->MD5)) {
+        problem("$label: MD5 is not accepted; use SHA256");
+    }
+    if ($hasUrl) {
+        $urlFiles++;
+        $url = trim((string) $f->URL, " \t\n\r\"");
+        $sha = trim((string) ($f->SHA256 ?? ''));
+        if ($sha === '') {
+            problem("$label: URL file has no SHA256");
+        } elseif (!preg_match('/^[a-f0-9]{64}$/', $sha)) {
+            problem("$label: SHA256 is not 64 lowercase hex characters");
+        }
+        if ($name === '') {
+            problem("$label: URL file has no Name");
+        } elseif (!str_starts_with($name, FLASH_DIR)) {
+            problem("$label: URL file target must be under " . FLASH_DIR);
+        }
+        if (!preg_match('#^https://#', $url)) {
+            problem("$label: URL must use https");
+        }
+        if (!preg_match('#/' . preg_quote(PLUGIN, '#') . '-[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9](_dev)?-noarch-[0-9]+\.txz$#', $url)) {
+            problem("$label: only the plugin's own package may be a URL file (the Claude binary and tmux are fetched by scripts)");
+        }
+        if ($run !== '') {
+            problem("$label: a URL file must not have a Run attribute");
+        }
+    }
+    if ($hasInline) {
+        if ($run !== '/bin/bash') {
+            problem("$label: INLINE scripts must be run by /bin/bash (Run=\"$run\")");
+        }
+        $script = (string) $f->INLINE;
+        if (preg_match('#(^|[^A-Za-z0-9_./-])/mnt(/|\b)#', $script)) {
+            problem("$label: INLINE script references /mnt (invariant 2)");
+        }
+        if (preg_match('/\b(curl|wget)\b/', $script)) {
+            problem("$label: INLINE script downloads something; downloads belong in package scripts");
+        }
+        if (trim($script) === '') {
+            problem("$label: INLINE script is empty");
+        }
+        if ($name !== '') {
+            problem("$label: an INLINE step with a Name would be written to disk; use Run-only steps");
+        }
+    }
+    if (!$hasUrl && !$hasInline) {
+        problem("$label: FILE has neither URL nor INLINE");
+    }
+    if (str_contains($method, 'remove')) {
+        $removeSteps++;
+    }
+}
+if ($urlFiles !== 1) {
+    problem("expected exactly one URL file (the package), found $urlFiles");
+}
+if ($removeSteps < 1) {
+    problem('no FILE with Method="remove"');
+}
+
+// --- lock cross-checks -----------------------------------------------------
+function lockValue(string $file, string $key): ?string
+{
+    $lines = @file($file, FILE_IGNORE_NEW_LINES);
+    if ($lines === false) {
+        return null;
+    }
+    foreach ($lines as $line) {
+        if (str_starts_with($line, "$key=")) {
+            return substr($line, strlen($key) + 1);
+        }
+    }
+    return null;
+}
+
+if ($checkLocks) {
+    $pairs = [
+        [$lock, 'CLAUDE_VERSION', 'claudeVersion'],
+        [$lock, 'CLAUDE_SHA256', 'claudeSHA256'],
+        [$lock, 'CLAUDE_URL', 'claudeURL'],
+        [$tmuxLock, 'TMUX_PKG', 'tmuxPkg'],
+        [$tmuxLock, 'TMUX_SHA256', 'tmuxSHA256'],
+        [$tmuxLock, 'TMUX_URL', 'tmuxURL'],
+    ];
+    foreach ($pairs as [$lockFile, $key, $entity]) {
+        $expected = lockValue($lockFile, $key);
+        $actual = isset($entities[$entity]) ? expand($entities[$entity], $entities) : null;
+        if ($expected === null) {
+            problem("$key missing from $lockFile");
+        } elseif ($actual === null) {
+            problem("entity '$entity' missing (needed to cross-check $key)");
+        } elseif ($expected !== $actual) {
+            problem("entity '$entity' ($actual) does not match $key in $lockFile ($expected)");
+        }
+    }
+}
+
+// txzName must carry the plugin version.
+if (isset($entities['txzName'], $attrs['version'])) {
+    $expectedPrefix = PLUGIN . '-' . str_replace('-', '_', $attrs['version']) . '-noarch-';
+    if (!str_starts_with(expand($entities['txzName'], $entities), $expectedPrefix)) {
+        problem("entity 'txzName' does not carry the plugin version {$attrs['version']}");
+    }
+}
+
+report();
+
+function report(): never
+{
+    global $errors, $file;
+    if ($errors === []) {
+        echo "lint-plg: $file: ok\n";
+        exit(0);
+    }
+    foreach ($errors as $e) {
+        fwrite(STDERR, "lint-plg: $file: $e\n");
+    }
+    fwrite(STDERR, sprintf("lint-plg: %d problem(s)\n", count($errors)));
+    exit(1);
+}
