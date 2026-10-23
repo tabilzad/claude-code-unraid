@@ -101,7 +101,7 @@ plugin_dir="$tree/usr/local/emhttp/plugins/$PLUGIN"
 missing=0
 while IFS= read -r -d '' f; do
   case "$f" in
-    *.in | *.json | *.md) continue ;;
+    *.in | *.json | *.md | *.php) continue ;; # templates, data and PHP libraries are not executables
   esac
   if [ ! -x "$f" ]; then
     printf 'build-txz: not executable (missing #! line): %s\n' "${f#"$tree"}" >&2
@@ -131,7 +131,7 @@ while IFS= read -r line; do
   path=${line##* }
   case "$path" in
     usr/local/emhttp/plugins/$PLUGIN/scripts/* | usr/local/emhttp/plugins/$PLUGIN/event/* | usr/local/bin/*)
-      case "$path" in *.in | *.json | *.md | */) continue ;; esac
+      case "$path" in *.in | *.json | *.md | *.php | */) continue ;; esac
       [ "$mode" = "-rwxr-xr-x" ] || die "wrong mode in archive for $path: $mode"
       ;;
   esac

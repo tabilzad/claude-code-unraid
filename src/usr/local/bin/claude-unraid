@@ -9,10 +9,12 @@
 #   claude-unraid verify              re-hash the installed binary against the pin
 #   claude-unraid migrate-login       copy a login made in fallback mode to the data dir
 #   claude-unraid doctor              self-checks plus `claude doctor`
-#   claude-unraid start|stop|attach|list|restore   supervised sessions (later phase)
+#   claude-unraid start <ws> [--remote-control] [--resume ID]   supervised session in tmux
+#   claude-unraid stop <ws>|--all [--timeout N] [--mark-restore]
+#   claude-unraid attach <ws> | list | restore [--dry-run]
 #
-# Exit codes: 0 ok, 1 a check failed, 64 usage, 69 feature not available yet,
-# 78 no verified binary.
+# Exit codes: 0 ok, 1 a check failed, 64 usage, 69 tmux unavailable, 77 Remote
+# Control disabled, 78 no verified binary.
 set -uo pipefail
 
 PLUGIN=claude-code-unraid
@@ -143,8 +145,13 @@ cmd_status() {
       for f in "$POLICY_DIR"/*.json; do
         [ -f "$f" ] && printf 'policy_files[]=%s\n' "$(basename -- "$f")"
       done
-      printf 'sessions=@json_empty_list\n'
-    } | sed 's/^sessions=@json_empty_list$//' | "$SCRIPTS/kv2json"
+      local sws sstate sid sstarted
+      while IFS=$'	' read -r sws sstate sid sstarted; do
+        [ -n "$sws" ] || continue
+        printf 'sessions[]=%s
+' "$sws|$sstate|$sid|$sstarted"
+      done < <(sessions_tsv)
+    } | "$SCRIPTS/kv2json"
     return 0
   fi
 
@@ -179,7 +186,16 @@ cmd_status() {
   done
   [ "$any" = 1 ] || printf 'none'
   printf '\n'
-  printf 'sessions:      (available after the sessions phase)\n'
+  printf 'sessions:      '
+  local sws sstate sid sstarted sn=0
+  while IFS=$'	' read -r sws sstate sid sstarted; do
+    [ -n "$sws" ] || continue
+    printf '%s (%s) ' "$sws" "$sstate"
+    sn=$((sn + 1))
+  done < <(sessions_tsv)
+  [ "$sn" -gt 0 ] || printf 'none'
+  printf '
+'
 }
 
 # ---------------------------------------------------------------------------
@@ -410,6 +426,327 @@ cmd_doctor() {
 }
 
 # ---------------------------------------------------------------------------
+# Supervised sessions: the bundled tmux, one session per workspace
+# ---------------------------------------------------------------------------
+TMUX_BIN="$LIB_DIR/bin/tmux"
+TMUX_SOCK="$RUN_DIR/tmux.sock"
+SESSIONS_DIR="$RUN_DIR/sessions"
+REGISTRY="$SCRIPTS/registry"
+
+tmux_ok() { [ -x "$TMUX_BIN" ]; }
+tmx() { "$TMUX_BIN" -S "$TMUX_SOCK" "$@"; }
+session_name() { printf '%s-%s' "$PLUGIN" "$1"; }
+session_running() { tmx has-session -t "=$(session_name "$1")" 2>/dev/null; }
+
+need_tmux() {
+  tmux_ok && return 0
+  die "supervised sessions need the bundled tmux, which is not available ($(state_get "$TMUX_STATE" error 2>/dev/null || echo 'not fetched yet')). Run 'claude-unraid doctor'; a reboot or a plugin reinstall retries the download." 69
+}
+
+# registry_file: the registry next to the active config dir (host path + ROOT)
+registry_file() {
+  local cd
+  cd=$("$SCRIPTS/mode" config-dir)
+  printf '%s/sessions.json' "$ROOT$(dirname -- "$cd")"
+}
+
+# forget_session WS: drop the pid and info files of a session
+forget_session() {
+  rm -f -- "${SESSIONS_DIR:?}/${1:?}.pid" "${SESSIONS_DIR:?}/${1:?}.info"
+}
+
+record_session_pid() { # WS
+  local pid
+  pid=$(tmx list-panes -t "=$(session_name "$1")" -F '#{pane_pid}' 2>/dev/null | head -n1)
+  mkdir -p -- "$SESSIONS_DIR"
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$pid" >"$SESSIONS_DIR/$1.pid"
+  fi
+}
+
+running_workspaces() {
+  tmx list-sessions -F '#{session_name}' 2>/dev/null | sed -n "s/^$PLUGIN-//p"
+}
+
+# launch_session WS RESUME_ID REMOTE(0|1): start the tmux session running the
+# launcher in the workspace. Environment flags travel through env(1) so that
+# the pane PID stays the Claude Code process (every hop execs).
+launch_session() {
+  local ws=$1 resume_id=$2 remote=$3 work_dir dir
+  "$SCRIPTS/mode" ensure-dirs >/dev/null 2>&1 || true
+  work_dir=$("$SCRIPTS/mode" work-dir)
+  dir="$ROOT$work_dir/$ws"
+  { mkdir -p -- "$dir" && chmod 0755 -- "$dir"; } || die "could not create $work_dir/$ws"
+  local -a cmd=(env CLAUDE_CODE_UNRAID_SUPERVISED=1)
+  [ "$remote" = 1 ] && cmd+=(CLAUDE_CODE_UNRAID_REMOTE_CONTROL=1)
+  cmd+=("$BIN_LAUNCHER")
+  [ -n "$resume_id" ] && cmd+=(--resume "$resume_id")
+  [ "$remote" = 1 ] && cmd+=(--remote-control "$ws")
+  mkdir -p -- "$RUN_DIR" "$SESSIONS_DIR"
+  tmx new-session -d -s "$(session_name "$ws")" -c "$dir" -- "${cmd[@]}" || return 1
+  record_session_pid "$ws"
+  printf 'workspace=%s\ncwd=%s\nstarted_at=%s\nremote_control=%s\nresume=%s\n' \
+    "$ws" "$work_dir/$ws" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$remote" "$resume_id" >"$SESSIONS_DIR/$ws.info"
+  log info "supervised session started: $ws${resume_id:+ (resume $resume_id)}$([ "$remote" = 1 ] && echo ' with Remote Control')"
+  return 0
+}
+
+cmd_start() {
+  local ws="" remote=0 resume_id=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --remote-control) remote=1 ;;
+      --resume)
+        resume_id=${2:-}
+        shift
+        ;;
+      -*) die "unknown option $1" 64 ;;
+      *) ws=$1 ;;
+    esac
+    shift
+  done
+  [[ "$ws" =~ $WORKSPACE_RE ]] || die "workspace names are 1-48 characters: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit" 64
+  [ -z "$resume_id" ] || [[ "$resume_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || die "that does not look like a session id" 64
+  need_tmux
+  if [ "$remote" = 1 ] && [ "$(cfg_bool REMOTE_CONTROL no)" != yes ]; then
+    die "Remote Control is disabled in the plugin settings (REMOTE_CONTROL). Enable it there first; sessions then store their transcript on Anthropic's servers while connected." 77
+  fi
+  if session_running "$ws"; then
+    printf 'claude-unraid: session %s is already running. Attach with: claude-unraid attach %s\n' "$ws" "$ws"
+    return 0
+  fi
+  launch_session "$ws" "$resume_id" "$remote" || die "could not start the tmux session for $ws" 1
+  local work_dir
+  work_dir=$("$SCRIPTS/mode" work-dir)
+  printf 'claude-unraid: session %s started in %s/%s. Attach with: claude-unraid attach %s\n' "$ws" "$work_dir" "$ws" "$ws"
+  if [ "$("$SCRIPTS/mode" get)" = fallback ]; then
+    printf 'claude-unraid: note: fallback mode (array not started); this session lives in RAM and is stopped when the mode changes.\n' >&2
+  fi
+}
+
+# stop_sessions TIMEOUT MARK_RESTORE WS...: /exit, then SIGTERM, then SIGKILL,
+# all within TIMEOUT seconds.
+stop_sessions() {
+  local timeout=$1 mark=$2
+  shift 2
+  local -a targets=("$@") ids=()
+  local ws reg id deadline alive pid
+  reg=$(registry_file)
+  for ws in "${targets[@]}"; do
+    id=$("$REGISTRY" live "$reg" "$ws" 2>/dev/null || true)
+    [ -n "$id" ] && ids+=("$id")
+  done
+  if [ "$mark" = 1 ] && [ "${#ids[@]}" -gt 0 ]; then
+    "$REGISTRY" mark-restore "$reg" 1 "${ids[@]}" 2>/dev/null || log warning "could not flag sessions for restore"
+  fi
+  for ws in "${targets[@]}"; do
+    tmx send-keys -t "=$(session_name "$ws"):" -l '/exit' 2>/dev/null || true
+    tmx send-keys -t "=$(session_name "$ws"):" Enter 2>/dev/null || true
+  done
+  deadline=$((SECONDS + timeout))
+  local soft=$((SECONDS + (timeout + 1) / 2))
+  while [ "$SECONDS" -lt "$soft" ]; do
+    alive=0
+    for ws in "${targets[@]}"; do session_running "$ws" && alive=1; done
+    [ "$alive" = 0 ] && break
+    sleep 0.25
+  done
+  for ws in "${targets[@]}"; do
+    if session_running "$ws"; then
+      pid=$(cat "$SESSIONS_DIR/$ws.pid" 2>/dev/null || true)
+      [[ "$pid" =~ ^[0-9]+$ ]] && kill -TERM "$pid" 2>/dev/null
+    fi
+  done
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    alive=0
+    for ws in "${targets[@]}"; do session_running "$ws" && alive=1; done
+    [ "$alive" = 0 ] && break
+    sleep 0.25
+  done
+  local killed=0
+  for ws in "${targets[@]}"; do
+    if session_running "$ws"; then
+      pid=$(cat "$SESSIONS_DIR/$ws.pid" 2>/dev/null || true)
+      [[ "$pid" =~ ^[0-9]+$ ]] && kill -KILL "$pid" 2>/dev/null
+      tmx kill-session -t "=$(session_name "$ws")" 2>/dev/null || true
+      killed=$((killed + 1))
+      log warning "session $ws did not exit within ${timeout}s; killed"
+    fi
+    forget_session "$ws"
+  done
+  if [ "$mark" = 0 ] && [ "${#ids[@]}" -gt 0 ]; then
+    "$REGISTRY" mark-ended "$reg" stopped "${ids[@]}" 2>/dev/null || true
+  fi
+  log info "stopped ${#targets[@]} supervised session(s): ${targets[*]} ($killed killed)"
+  printf 'claude-unraid: stopped %s session(s): %s\n' "${#targets[@]}" "${targets[*]}"
+}
+
+cmd_stop() {
+  local all=0 timeout=10 mark=0 names=() ws
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all=1 ;;
+      --timeout)
+        timeout=${2:-}
+        shift
+        ;;
+      --mark-restore) mark=1 ;;
+      -*) die "unknown option $1" 64 ;;
+      *) names+=("$1") ;;
+    esac
+    shift
+  done
+  [[ "$timeout" =~ ^[0-9]+$ ]] && [ "$timeout" -ge 1 ] || die "--timeout needs a number of seconds" 64
+  if ! tmux_ok; then
+    local f
+    for f in "$SESSIONS_DIR"/*.pid "$SESSIONS_DIR"/*.info; do
+      [ -e "$f" ] && rm -f -- "$f"
+    done
+    printf 'claude-unraid: tmux is not available, so no supervised session can be running.\n'
+    return 0
+  fi
+  local -a targets=()
+  if [ "$all" = 1 ]; then
+    while IFS= read -r ws; do [ -n "$ws" ] && targets+=("$ws"); done < <(running_workspaces)
+  else
+    [ "${#names[@]}" -gt 0 ] || die "stop needs a workspace name or --all" 64
+    for ws in "${names[@]}"; do
+      [[ "$ws" =~ $WORKSPACE_RE ]] || die "bad workspace name: $ws" 64
+      if session_running "$ws"; then targets+=("$ws"); else printf 'claude-unraid: %s is not running\n' "$ws"; fi
+    done
+  fi
+  if [ "${#targets[@]}" -eq 0 ]; then
+    printf 'claude-unraid: no supervised sessions running.\n'
+    return 0
+  fi
+  stop_sessions "$timeout" "$mark" "${targets[@]}"
+}
+
+cmd_attach() {
+  local ws=${1:-}
+  [[ "$ws" =~ $WORKSPACE_RE ]] || die "attach needs a workspace name" 64
+  need_tmux
+  session_running "$ws" || die "session $ws is not running (claude-unraid list shows what is; start it with: claude-unraid start $ws)" 1
+  exec "$TMUX_BIN" -S "$TMUX_SOCK" attach-session -t "=$(session_name "$ws")"
+}
+
+# sessions_tsv: workspace<TAB>state<TAB>session_id<TAB>started_at for every
+# known supervised session (running, or with leftover state from a crash)
+sessions_tsv() {
+  local reg ws id started seen=" " f
+  reg=$(registry_file)
+  if tmux_ok; then
+    while IFS= read -r ws; do
+      [ -n "$ws" ] || continue
+      seen="$seen$ws "
+      id=$("$REGISTRY" live "$reg" "$ws" 2>/dev/null || true)
+      started=$(sed -n 's/^started_at=//p' "$SESSIONS_DIR/$ws.info" 2>/dev/null || true)
+      printf '%s\trunning\t%s\t%s\n' "$ws" "${id:--}" "${started:--}"
+    done < <(running_workspaces)
+  fi
+  for f in "$SESSIONS_DIR"/*.info; do
+    [ -f "$f" ] || continue
+    ws=$(basename -- "$f" .info)
+    case "$seen" in *" $ws "*) continue ;; esac
+    started=$(sed -n 's/^started_at=//p' "$f")
+    printf '%s\texited\t-\t%s\n' "$ws" "${started:--}"
+  done
+}
+
+cmd_list() {
+  local ws state id started n=0
+  printf '%-20s %-8s %-12s %s\n' WORKSPACE STATE SESSION STARTED
+  while IFS=$'\t' read -r ws state id started; do
+    [ -n "$ws" ] || continue
+    n=$((n + 1))
+    printf '%-20s %-8s %-12s %s\n' "$ws" "$state" "${id:0:12}" "$started"
+  done < <(sessions_tsv)
+  [ "$n" -gt 0 ] || printf '(no supervised sessions; start one with: claude-unraid start <workspace>)\n'
+}
+
+cmd_restore() {
+  local dry=0
+  [ "${1:-}" = --dry-run ] && dry=1
+  if [ "$(cfg_bool RESTORE_SESSIONS yes)" != yes ]; then
+    printf 'claude-unraid: session restore is disabled in the settings (RESTORE_SESSIONS).\n'
+    return 0
+  fi
+  if [ "$("$SCRIPTS/mode" get)" != pool ]; then
+    printf 'claude-unraid: restore only runs in pool mode (the array is not started).\n'
+    return 0
+  fi
+  if ! tmux_ok; then
+    log warning "restore skipped: tmux is not available"
+    notify warning "Claude Code sessions not restored" "The bundled tmux is not available, so supervised sessions cannot be brought back. Run 'claude-unraid doctor'."
+    return 0
+  fi
+  local reg max cands grace
+  reg=$(registry_file)
+  max=$(cfg_get MAX_RESTORE 4)
+  [[ "$max" =~ ^[0-9]+$ ]] || max=4
+  cands=$("$REGISTRY" candidates "$reg" "$max" 2>/dev/null || true)
+  if [ -z "$cands" ]; then
+    if [ "$dry" = 1 ]; then
+      printf '(nothing to restore)\n'
+    else
+      log info "restore: nothing to bring back"
+    fi
+    return 0
+  fi
+  if [ "$dry" = 1 ]; then
+    printf '%s\n' "$cands"
+    return 0
+  fi
+  grace=6
+  if [ "$test_mode" = 1 ] && [ -n "${CCU_RESTORE_GRACE:-}" ]; then
+    grace=$CCU_RESTORE_GRACE
+  fi
+  local id ws remote restored=0 fresh=0 failed=0 ids=() i use_remote
+  while IFS=$'\t' read -r id ws _ _ remote; do
+    [ -n "$id" ] || continue
+    ids+=("$id")
+    if session_running "$ws"; then
+      log info "restore: $ws is already running"
+      continue
+    fi
+    use_remote=0
+    if [ "$remote" = yes ] && [ "$(cfg_bool REMOTE_CONTROL no)" = yes ]; then
+      use_remote=1
+    fi
+    if ! launch_session "$ws" "$id" "$use_remote"; then
+      log warning "restore: could not start $ws"
+      failed=$((failed + 1))
+      continue
+    fi
+    for ((i = 0; i < grace * 4; i++)); do
+      session_running "$ws" || break
+      sleep 0.25
+    done
+    if session_running "$ws"; then
+      restored=$((restored + 1))
+      log info "restore: $ws resumed session $id"
+    else
+      log warning "restore: resuming $id in $ws failed; starting a fresh session there"
+      forget_session "$ws"
+      if launch_session "$ws" "" "$use_remote"; then
+        fresh=$((fresh + 1))
+      else
+        failed=$((failed + 1))
+      fi
+    fi
+  done <<<"$cands"
+  [ "${#ids[@]}" -gt 0 ] && "$REGISTRY" mark-restore "$reg" 0 "${ids[@]}" 2>/dev/null
+  local summary="restore: $restored resumed, $fresh started fresh, $failed failed"
+  log info "$summary"
+  if [ "$failed" -gt 0 ]; then
+    notify warning "Claude Code sessions restored with problems" "$summary. See /var/log/$PLUGIN/restore.log."
+  elif [ $((restored + fresh)) -gt 0 ]; then
+    notify normal "Claude Code sessions restored" "$summary. Attach with: claude-unraid attach <workspace>"
+  fi
+  printf 'claude-unraid: %s\n' "$summary"
+}
+
+# ---------------------------------------------------------------------------
 case "${1:-}" in
   status)
     shift
@@ -429,9 +766,22 @@ case "${1:-}" in
     cmd_migrate_login "$@"
     ;;
   doctor) cmd_doctor ;;
-  start | stop | attach | list | restore)
-    printf 'claude-unraid: %s is not available yet (supervised sessions arrive in a later phase).\n' "$1" >&2
-    exit 69
+  start)
+    shift
+    cmd_start "$@"
+    ;;
+  stop)
+    shift
+    cmd_stop "$@"
+    ;;
+  attach)
+    shift
+    cmd_attach "$@"
+    ;;
+  list) cmd_list ;;
+  restore)
+    shift
+    cmd_restore "$@"
     ;;
   -h | --help | help | '')
     usage

@@ -193,7 +193,8 @@ TOKEN="sk-ant-oat01-TESTTOKENTESTTOKENTESTTOKEN0123456789"
   assert_not_contains "$output" "FAIL  data directory"
 }
 
-@test "session commands are not available yet; usage errors" {
+@test "session commands need tmux; usage errors" {
+  rm "$LIB/bin/tmux"
   run "$CU" start server
   [ "$status" -eq 69 ]
   run "$CU" bogus

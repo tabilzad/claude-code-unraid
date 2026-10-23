@@ -3,7 +3,8 @@
 # stopping: the array is about to stop. Disks are still mounted here; by
 # stopping_array they are gone, so this is the last safe moment.
 #
-#   1. stop supervised sessions (claude-unraid stop --all --timeout 10),
+#   1. stop supervised sessions (claude-unraid stop --all --timeout 10 --mark-restore,
+#      so that they come back after disks_mounted),
 #      bounded to 12 s in total
 #   2. switch to fallback mode (forced, sessions are gone)
 #   3. report unsupervised `claude` processes whose cwd or open files are under
@@ -41,7 +42,7 @@ event_body() {
   local rc=0
   if [ -x "$BIN_HELPER" ]; then
     mkdir -p -- "$LOG_DIR"
-    run_with_timeout 12 "$BIN_HELPER" stop --all --timeout 10 >>"$LOG_DIR/sessions.log" 2>&1 || rc=$?
+    run_with_timeout 12 "$BIN_HELPER" stop --all --timeout 10 --mark-restore >>"$LOG_DIR/sessions.log" 2>&1 || rc=$?
     case "$rc" in
       0) log info "supervised sessions stopped" ;;
       69) log info "session supervision not available; nothing to stop" ;;

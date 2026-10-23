@@ -1,0 +1,69 @@
+#!/usr/bin/env php
+<?php
+/*
+ * registry: read and adjust the session registry from shell scripts.
+ *
+ *   registry candidates FILE MAX          restore candidates, one per line:
+ *                                         session_id<TAB>workspace<TAB>cwd<TAB>started_at<TAB>remote_control
+ *   registry live FILE WORKSPACE          session id of the live supervised entry, or nothing
+ *   registry list FILE                    workspace<TAB>session_id<TAB>started_at<TAB>ended_at<TAB>supervised<TAB>restore
+ *   registry mark-restore FILE 0|1 ID...  set or clear the restore flag
+ *   registry mark-ended FILE REASON ID... record an end for sessions that were killed
+ *
+ * Paths in the registry are host paths; the ROOT environment variable is
+ * prepended when checking that a cwd still exists (tests).
+ */
+declare(strict_types=1);
+
+require __DIR__ . '/registry-lib.php';
+
+function fail(string $msg): never
+{
+    fwrite(STDERR, "registry: $msg\n");
+    exit(1);
+}
+
+$cmd = $argv[1] ?? '';
+$file = $argv[2] ?? '';
+if ($cmd === '' || $file === '') {
+    fail('usage: registry candidates|live|list|mark-restore|mark-ended FILE ...');
+}
+$root = (string) getenv('ROOT');
+
+try {
+    switch ($cmd) {
+        case 'candidates':
+            $max = (int) ($argv[3] ?? 4);
+            $reg = registry_load($file);
+            foreach (registry_restore_candidates($reg, $max, static fn (string $cwd): bool => is_dir($root . $cwd)) as $s) {
+                printf("%s\t%s\t%s\t%s\t%s\n", $s['session_id'], $s['workspace'], $s['cwd'], $s['started_at'], $s['remote_control'] ? 'yes' : 'no');
+            }
+            break;
+        case 'live':
+            $ws = $argv[3] ?? '';
+            $s = registry_live_for_workspace(registry_load($file), $ws);
+            if ($s !== null) {
+                echo $s['session_id'], "\n";
+            }
+            break;
+        case 'list':
+            foreach (registry_load($file)['sessions'] as $s) {
+                printf("%s\t%s\t%s\t%s\t%s\t%s\n", $s['workspace'] ?? '-', $s['session_id'], $s['started_at'], $s['ended_at'] ?? '-', $s['supervised'] ? 'yes' : 'no', $s['restore'] ? 'yes' : 'no');
+            }
+            break;
+        case 'mark-restore':
+            $flag = ($argv[3] ?? '0') === '1';
+            $ids = array_slice($argv, 4);
+            registry_update($file, static fn (array $reg): array => registry_set_restore($reg, $ids, $flag, registry_now()));
+            break;
+        case 'mark-ended':
+            $reason = $argv[3] ?? 'stopped';
+            $ids = array_slice($argv, 4);
+            registry_update($file, static fn (array $reg): array => registry_mark_ended($reg, $ids, $reason, registry_now()));
+            break;
+        default:
+            fail("unknown command $cmd");
+    }
+} catch (Throwable $e) {
+    fail($e->getMessage());
+}

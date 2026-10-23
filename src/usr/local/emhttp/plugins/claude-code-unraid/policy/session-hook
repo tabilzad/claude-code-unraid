@@ -1,12 +1,83 @@
 #!/usr/bin/env php
 <?php
 /*
- * session-hook: SessionStart and SessionEnd hook.
+ * session-hook: SessionStart and SessionEnd hook (SPEC section 10).
  *
- * Placeholder until the sessions phase implements the registry. It swallows
- * its input and exits 0 so that it can never block or slow down a session.
+ * Records the session in the registry next to the active CLAUDE_CONFIG_DIR
+ * (<DATA_DIR>/sessions.json in pool mode, /run/<plugin>/sessions.json in
+ * fallback mode). The workspace is derived from the cwd when it is under
+ * <base>/work/. CLAUDE_CODE_UNRAID_SUPERVISED=1 and
+ * CLAUDE_CODE_UNRAID_REMOTE_CONTROL=1 are set by the supervisor.
+ *
+ * It must never block or fail a session: everything is wrapped, and every
+ * exit path is 0. The SessionEnd budget is small, so no subprocesses are run.
  */
 declare(strict_types=1);
 
-@stream_get_contents(STDIN);
+require __DIR__ . '/../scripts/registry-lib.php';
+
+set_error_handler(static function (): bool {
+    return true; // nothing here is allowed to turn into a failure
+});
+
+function hook_log(string $msg): void
+{
+    $root = (string) getenv('ROOT');
+    $dir = $root . '/var/log/claude-code-unraid';
+    if (is_dir($dir) || @mkdir($dir, 0755, true)) {
+        @file_put_contents($dir . '/install.log', gmdate('Y-m-d\TH:i:s\Z') . " [warning] session-hook: $msg\n", FILE_APPEND);
+    }
+}
+
+try {
+    $raw = stream_get_contents(STDIN);
+    if ($raw === false || trim($raw) === '') {
+        exit(0);
+    }
+    $input = json_decode($raw, true, 32, JSON_THROW_ON_ERROR);
+    if (!is_array($input)) {
+        exit(0);
+    }
+    $event = (string) ($input['hook_event_name'] ?? '');
+    $sessionId = (string) ($input['session_id'] ?? '');
+    $cwd = (string) ($input['cwd'] ?? '');
+    if ($sessionId === '' || !preg_match('/^[A-Za-z0-9_\-]{1,128}$/', $sessionId)) {
+        exit(0);
+    }
+
+    $root = (string) getenv('ROOT');
+    $configDir = (string) getenv('CLAUDE_CONFIG_DIR');
+    $base = $configDir !== '' ? dirname(rtrim($configDir, '/')) : $root . '/run/claude-code-unraid';
+    $file = $base . '/sessions.json';
+    $workDir = $base . '/work';
+    $cfg = $root . '/boot/config/plugins/claude-code-unraid/claude-code-unraid.cfg';
+
+    $supervised = getenv('CLAUDE_CODE_UNRAID_SUPERVISED') === '1';
+    $remote = getenv('CLAUDE_CODE_UNRAID_REMOTE_CONTROL') === '1';
+    $workspace = registry_workspace_from_cwd($cwd, $workDir);
+    $now = registry_now();
+    $days = registry_cleanup_days($cfg);
+
+    if ($event === 'SessionStart') {
+        $source = (string) ($input['source'] ?? 'startup');
+        if (!preg_match('/^[a-z_]{1,32}$/', $source)) {
+            $source = 'startup';
+        }
+        registry_update($file, static function (array $reg) use ($sessionId, $cwd, $workspace, $source, $supervised, $remote, $now, $days): array {
+            $reg = registry_record_start($reg, $sessionId, $cwd, $workspace, $source, $supervised, $remote, $now);
+            return registry_prune($reg, $days, $now);
+        });
+    } elseif ($event === 'SessionEnd') {
+        $reason = (string) ($input['reason'] ?? 'other');
+        if (!preg_match('/^[a-z_]{1,32}$/', $reason)) {
+            $reason = 'other';
+        }
+        registry_update($file, static function (array $reg) use ($sessionId, $reason, $cwd, $now, $days): array {
+            $reg = registry_record_end($reg, $sessionId, $reason, $cwd, $now);
+            return registry_prune($reg, $days, $now);
+        });
+    }
+} catch (Throwable $e) {
+    hook_log('could not update the session registry: ' . $e->getMessage());
+}
 exit(0);
