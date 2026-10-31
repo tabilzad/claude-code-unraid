@@ -167,6 +167,15 @@ The last command writes a redacted report under `/tmp` for a bug report. Logs:
 and the `claude-code-unraid` lines in `/var/log/syslog`. Issues:
 <https://github.com/tabilzad/claude-code-unraid/issues>.
 
+**`UserPromptSubmit hook error ... security-guidance: no working Python 3 interpreter found`**
+comes from Anthropic's `security-guidance` plugin, not from this plugin. Its hooks are Python
+scripts, and Unraid ships no Python. The plugin reaches the server either because you
+installed it (`/plugin`) or because it is enabled for your claude.ai account and Claude Code
+synced it after `/login`. The error is non-blocking, but it repeats on every prompt. Either
+turn the plugin off on this server (`claude plugin list` shows its exact id, then
+`claude plugin disable <id>`, or use the Installed tab of `/plugin`) or install Python 3 from
+Community Applications, after which its reviews work.
+
 ## Licensing
 
 The plugin is MIT licensed ([LICENSE](LICENSE)); third-party notices are in
