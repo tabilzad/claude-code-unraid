@@ -7,6 +7,12 @@ below is the release tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- `claude-unraid` usage errors ended with their exit code (`... starting with a letter
+  or digit 64`). A missing workspace name now says which command needs one, and a bad
+  name is quoted back.
+
 ## [0.1.0-beta.2] - 2026-10-31
 
 ### Fixed

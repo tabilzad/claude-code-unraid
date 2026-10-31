@@ -106,6 +106,28 @@ TOKEN="sk-ant-oat01-TESTTOKENTESTTOKENTESTTOKEN0123456789"
   [ -z "$(ls -A "$FAKEROOT/tmp/$PLUGIN/fallback-work" 2>/dev/null)" ]
 }
 
+@test "usage errors name the command and never leak the exit code" {
+  # regression: die printed "$*", so every usage error ended in " 64"
+  run --separate-stderr "$CU" start
+  [ "$status" -eq 64 ]
+  [ "$stderr" = "claude-unraid: start needs a workspace name, for example: claude-unraid start server (claude-unraid help lists the commands)" ]
+  run --separate-stderr "$CU" work
+  [ "$status" -eq 64 ]
+  assert_contains "$stderr" "work needs a workspace name"
+  run --separate-stderr "$CU" attach ''
+  [ "$status" -eq 64 ]
+  assert_contains "$stderr" "attach needs a workspace name"
+  run --separate-stderr "$CU" start Bad
+  [ "$status" -eq 64 ]
+  [ "$stderr" = "claude-unraid: bad workspace name 'Bad': 1-48 characters, lowercase letters, digits, '.', '_' or '-', starting with a letter or digit" ]
+  run --separate-stderr "$CU" stop $'a\tb'
+  [ "$status" -eq 64 ]
+  assert_contains "$stderr" "bad workspace name 'a?b'"
+  run --separate-stderr "$CU" token bogus
+  [ "$status" -eq 64 ]
+  [ "$stderr" = "claude-unraid: token needs set, clear or status" ]
+}
+
 @test "token set from a pipe stores it with mode 0600 and never prints it" {
   run bash -c "printf '%s\n' '$TOKEN' | '$CU' token set"
   [ "$status" -eq 0 ]

@@ -34,9 +34,16 @@ usage() {
   sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "$0"
 }
 
-die() {
-  printf 'claude-unraid: %s\n' "$*" >&2
+die() { # MESSAGE [EXIT_CODE]
+  printf 'claude-unraid: %s\n' "$1" >&2
   exit "${2:-1}"
+}
+
+# require_ws COMMAND NAME: a usage error (64) unless NAME is a workspace name
+require_ws() {
+  [ -n "$2" ] || die "$1 needs a workspace name, for example: claude-unraid $1 server (claude-unraid help lists the commands)" 64
+  local shown=${2//[^[:print:]]/?}
+  [[ "$2" =~ $WORKSPACE_RE ]] || die "bad workspace name '$shown': 1-48 characters, lowercase letters, digits, '.', '_' or '-', starting with a letter or digit" 64
 }
 
 plugin_version() {
@@ -201,7 +208,7 @@ cmd_status() {
 # ---------------------------------------------------------------------------
 cmd_work() {
   local name=${1:-}
-  [[ "$name" =~ $WORKSPACE_RE ]] || die "workspace names are 1-48 characters: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit" 64
+  require_ws work "$name"
   local mode work_dir path
   mode=$("$SCRIPTS/mode" get)
   "$SCRIPTS/mode" ensure-dirs >/dev/null 2>&1 || true
@@ -505,7 +512,7 @@ cmd_start() {
     esac
     shift
   done
-  [[ "$ws" =~ $WORKSPACE_RE ]] || die "workspace names are 1-48 characters: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit" 64
+  require_ws start "$ws"
   [ -z "$resume_id" ] || [[ "$resume_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || die "that does not look like a session id" 64
   need_tmux
   if [ "$remote" = 1 ] && [ "$(cfg_bool REMOTE_CONTROL no)" != yes ]; then
@@ -611,7 +618,7 @@ cmd_stop() {
   else
     [ "${#names[@]}" -gt 0 ] || die "stop needs a workspace name or --all" 64
     for ws in "${names[@]}"; do
-      [[ "$ws" =~ $WORKSPACE_RE ]] || die "bad workspace name: $ws" 64
+      require_ws stop "$ws"
       if session_running "$ws"; then targets+=("$ws"); else printf 'claude-unraid: %s is not running\n' "$ws"; fi
     done
   fi
@@ -624,7 +631,7 @@ cmd_stop() {
 
 cmd_attach() {
   local ws=${1:-}
-  [[ "$ws" =~ $WORKSPACE_RE ]] || die "attach needs a workspace name" 64
+  require_ws attach "$ws"
   need_tmux
   session_running "$ws" || die "session $ws is not running (claude-unraid list shows what is; start it with: claude-unraid start $ws)" 1
   exec "$TMUX_BIN" -S "$TMUX_SOCK" attach-session -t "=$(session_name "$ws")"
