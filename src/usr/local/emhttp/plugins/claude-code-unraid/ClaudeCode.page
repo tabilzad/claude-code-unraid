@@ -13,10 +13,13 @@ Icon="terminal"
  * through Unraid's /update.php (CSRF enforced globally), validated server-side
  * by include/update.cfg.php, and the policy is re-rendered by install-policy
  * right after the save. Buttons post to include/exec.php (action allowlist).
+ * The Permissions box edits the policy.d/webgui.json drop-in through the
+ * policy-save action; include/policy.php validates the JSON before any write.
  * No token, account e-mail or transcript content ever reaches this page.
  */
 $docroot ??= ($_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp');
 require_once "$docroot/plugins/claude-code-unraid/include/status.php";
+require_once "$docroot/plugins/claude-code-unraid/include/policy.php";
 
 $ccu_status = ccu_status();
 $ccu_cfg = ccu_cfg();
@@ -116,6 +119,22 @@ _(Policy files)_:
 <input type="button" value="_(View log)_" onclick="openTerminal('log','Claude Code','claude-code-unraid/install.log')">
 </div>
 
+<div markdown="1">
+### Permissions
+
+Your own permission rules, kept on the flash drive as `/boot/config/plugins/claude-code-unraid/policy.d/webgui.json` and loaded into every session as the managed drop-in `50-user-webgui.json`. `allow` rules run without a prompt, `ask` rules always prompt, `deny` rules are refused. The plugin's baseline loads after this file, so what it locks (Manual mode, no bypass mode, the catastrophic-command deny list, the guard and audit hooks) cannot be changed here: such a key is reported and ignored. Saving applies the rules to sessions started from then on; running sessions keep the old rules until restarted. Save an empty box to remove the file.
+
+Rule syntax: `Bash(docker compose *)` matches every `docker compose` command (keep the space before the `*`), `Bash(uptime)` matches exactly that command, `Bash` alone allows every shell command, `WebFetch(domain:docs.unraid.net)` allows fetching from one domain, `Read(./.env)` names a file relative to the workspace. A prompt's "Yes, and don't ask again" writes a rule into the workspace's own `.claude/settings.local.json` instead, which is fine for rules you want in one workspace only.
+</div>
+
+<div>
+<textarea id="ccu_policy" rows="14" spellcheck="false" wrap="off" style="width:100%;max-width:900px;font-family:monospace;white-space:pre;" placeholder='{ "permissions": { "allow": [ "Bash(docker compose *)" ] } }'><?=ccu_h(ccu_policy_read())?></textarea>
+<p>
+<input type="button" value="_(Save permissions)_" onclick="ccuSavePolicy()">
+<input type="button" value="_(Insert example)_" onclick="ccuPolicyExample()">
+</p>
+</div>
+
 <form markdown="1" method="POST" action="/update.php" target="progressFrame">
 <input type="hidden" name="#file" value="claude-code-unraid/claude-code-unraid.cfg">
 <input type="hidden" name="#include" value="/plugins/claude-code-unraid/include/update.cfg.php">
@@ -197,6 +216,39 @@ function ccuAction(action) {
     var msg = 'request failed';
     try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
     swal({title: action, text: $('<div/>').text(msg).html(), type: 'error', html: true, confirmButtonText: "_(Ok)_"});
+  });
+}
+var ccuPolicyExampleText = JSON.stringify({permissions: {
+  allow: ["Bash(docker compose *)", "Bash(docker logs *)", "Bash(git *)", "WebFetch(domain:docs.unraid.net)"],
+  ask: ["Bash(docker restart *)"],
+  deny: ["Read(./.env)"]
+}}, null, 2);
+function ccuPolicyExample() {
+  var box = $('#ccu_policy');
+  if ($.trim(box.val()) !== '') {
+    swal({title: "_(Permissions)_", text: "_(The box is not empty. Clear it first to insert the example)_.", type: 'info', confirmButtonText: "_(Ok)_"});
+    return;
+  }
+  box.val(ccuPolicyExampleText);
+}
+function ccuSavePolicy() {
+  $.post('/plugins/claude-code-unraid/include/exec.php', {action: 'policy-save', policy: $('#ccu_policy').val(), csrf_token: csrf_token}, function(data) {
+    var lines = (data && data.output) ? data.output : [];
+    swal({
+      title: "_(Permissions)_",
+      text: $('<div/>').text(lines.join('\n') || 'saved').html().replace(/\n/g, '<br>'),
+      type: 'success',
+      html: true,
+      confirmButtonText: "_(Ok)_"
+    }, function() { location.reload(); });
+  }, 'json').fail(function(xhr) {
+    var msg = 'request failed';
+    try {
+      var d = JSON.parse(xhr.responseText);
+      msg = (d.errors && d.errors.length) ? d.errors.join('\n') : (d.error || msg);
+      if (d.notes && d.notes.length) msg += '\n' + d.notes.join('\n');
+    } catch (e) {}
+    swal({title: "_(Permissions not saved)_", text: $('<div/>').text(msg).html().replace(/\n/g, '<br>'), type: 'error', html: true, confirmButtonText: "_(Ok)_"});
   });
 }
 function ccuConfirmStop() {

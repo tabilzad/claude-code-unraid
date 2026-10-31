@@ -102,6 +102,35 @@ What it cannot do: stop a determined attacker who already controls your prompts,
 obfuscated command (it matches text), or protect you from what you approve.
 [docs/SECURITY.md](docs/SECURITY.md) lists the known bypasses honestly.
 
+## Adding your own permission rules
+
+Three ways, all additive: nothing you add can switch off the baseline's locks or the guard.
+
+- **In a session.** Answer a prompt with "Yes, and don't ask again". The rule is saved in the
+  workspace's `.claude/settings.local.json`, which lives on the pool with the workspace.
+- **Settings, Claude Code, Permissions.** A box for the drop-in
+  `/boot/config/plugins/claude-code-unraid/policy.d/webgui.json`, which the plugin installs
+  as a managed `50-user-webgui.json` for every session. It is checked before it is written
+  and applied to sessions started from then on. Example:
+
+  ```json
+  { "permissions": {
+      "allow": ["Bash(docker compose *)", "Bash(docker logs *)", "Bash(git *)"],
+      "ask":   ["Bash(docker restart *)"],
+      "deny":  ["Read(./.env)"] } }
+  ```
+
+  `Bash(docker compose *)` matches every `docker compose` command (keep the space before the
+  `*`), `Bash(uptime)` matches that exact command, `Bash` alone allows every shell command.
+- **More drop-ins.** Any `policy.d/*.json` file is installed the same way; apply with Settings,
+  Claude Code, Apply.
+
+Keys the baseline sets (`permissions.defaultMode`, `disableBypassPermissionsMode`,
+`disableAutoMode`, `disableRemoteControl`, `cleanupPeriodDays`, the update locks) are
+reported and ignored, because the baseline loads last. Claude Code's own
+[permissions documentation](https://code.claude.com/docs/en/permissions) has the full rule
+syntax.
+
 ## Storage, persistence, the emergency token, Remote Control
 
 Unraid runs from RAM, so the plugin has two storage modes: **pool mode** once the array is

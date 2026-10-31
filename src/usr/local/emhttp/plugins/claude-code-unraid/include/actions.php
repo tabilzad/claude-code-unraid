@@ -2,29 +2,37 @@
 /*
  * actions.php: the actions the Claude Code page may trigger (SPEC section 12).
  *
- *   ccu_run_action(string $action): array
+ *   ccu_run_action(string $action, array $params = []): array
  *
  * The action name is matched against a fixed allowlist; every command uses a
- * fixed binary and fixed arguments through escapeshellarg(). No request data
- * other than the action name is ever used, and the action name never reaches
- * a shell. Results are arrays ready for json_encode():
+ * fixed binary and fixed arguments through escapeshellarg(). The only request
+ * data used besides the action name is the policy text of 'policy-save',
+ * which include/policy.php parses as JSON and writes to a fixed file; neither
+ * it nor the action name ever reaches a shell. Results are arrays ready for
+ * json_encode():
  *   ['ok' => bool, 'action' => string, ...] or ['ok' => false, 'error' => string]
  */
 declare(strict_types=1);
 
 require_once __DIR__ . '/status.php';
+require_once __DIR__ . '/policy.php';
 
-const CCU_ACTIONS = ['status', 'verify', 'restore', 'stop-all', 'log'];
+const CCU_ACTIONS = ['status', 'verify', 'restore', 'stop-all', 'log', 'policy-save'];
 const CCU_LOG_LINES = 200;
 const CCU_LOG_MAX_BYTES = 524288; // same cap as lib.sh LOG_MAX_BYTES
 
-function ccu_run_action(string $action): array
+function ccu_run_action(string $action, array $params = []): array
 {
     if (!in_array($action, CCU_ACTIONS, true)) {
         return ['ok' => false, 'error' => 'unknown action'];
     }
     $root = (string) getenv('ROOT');
     switch ($action) {
+        case 'policy-save':
+            if (!is_string($params['policy'] ?? null)) {
+                return ['ok' => false, 'action' => 'policy-save', 'error' => 'the policy text is missing'];
+            }
+            return ccu_policy_save($params['policy']);
         case 'status':
             $status = ccu_status();
             return ['ok' => $status !== [], 'action' => 'status', 'status' => $status];

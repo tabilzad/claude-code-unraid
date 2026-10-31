@@ -7,6 +7,13 @@ below is the release tag.
 
 ## [Unreleased]
 
+### Added
+
+- A Permissions box in the settings page edits the `policy.d/webgui.json` drop-in: allow,
+  ask and deny rules are validated as JSON, written to the flash drive only when they
+  changed, and applied with `install-policy`. Keys the baseline locks are reported as
+  ignored instead of silently overridden.
+
 ## [0.1.0-beta.3] - 2026-10-31
 
 ### Fixed

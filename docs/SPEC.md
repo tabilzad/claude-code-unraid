@@ -153,6 +153,8 @@ Merge semantics (documented): drop-ins load alphabetically after `managed-settin
 
 **User drop-ins:** `/boot/config/plugins/PLUGIN/policy.d/*.json`. Each is validated (PHP `json_decode`, top level must be an object) and copied as `50-user-<name>.json`. Invalid files are skipped with a notification. This matters because a managed drop-in that is not a JSON object makes Claude Code refuse to start.
 
+The settings page edits one of them, `policy.d/webgui.json` (installed as `50-user-webgui.json`), through the `policy-save` action of `include/exec.php` (`include/policy.php`): the text must parse as a JSON object, `permissions` must be an object and its `allow`/`ask`/`deny` members lists of strings, keys the baseline locks are reported as ignored (never rejected), the normalised JSON is written to the flash drive only when it differs from the file, an empty text or `{}` removes the file, and `install-policy` runs after every change. Nothing from the request reaches a shell.
+
 **Guard** (`policy/guard`, PHP): two tiers, adapted from `mygrexit/claude-unraid-manager` `claude-guard` (MIT, with attribution in NOTICE).
 - **Block (exit 2):**
   - `mkfs*`, `wipefs`, `shred`
@@ -203,6 +205,7 @@ One page: Settings → User Utilities → Claude Code (`ClaudeCode.page`, `Menu=
 - **Status panel:** the same data as `claude-unraid status --json`.
 - **Settings form:** DATA_DIR, restore on/off, max restore, cleanup days, auto-mode allowed, `/boot` rw allowed, Remote Control allowed. Saved through the standard Unraid `/update.php` with `csrf_token`; `#command` then runs `install-policy` so the baseline is re-rendered.
 - **Actions:** verify binary, restore sessions, stop all sessions, show live log (`openTerminal` pattern used by built-in pages). Each is posted to `include/exec.php` with an action allowlist; CSRF is enforced globally by `local_prepend.php` (`csrf_token` field or `X-CSRF-Token` header, HTTP 403 otherwise).
+- **Permissions box:** a textarea holding `policy.d/webgui.json`, saved with the `policy-save` action, the one action that carries request data besides its name (section 9). Errors come back as HTTP 400 with the validation messages; a successful save returns the install-policy output and a note that running sessions keep the old rules.
 - **Sessions table:** workspace, state, started, and a copyable `claude-unraid attach <ws>`.
 - **Warnings:** flash share exported (`disks.ini` `[flash]` `export` is `e` or `eh`), DATA_DIR on `/mnt/user` FUSE, emergency token present, Remote Control enabled.
 - No token entry in the GUI for v1; token management is CLI only.

@@ -37,7 +37,9 @@ Lists in managed drop-ins merge, scalars from the later file win. A user drop-in
 re-enable bypass mode, auto mode or Remote Control, and cannot remove the hooks.
 Every drop-in is validated before it is written, because a managed file that is not a
 JSON object stops Claude Code from starting at all; invalid files are skipped with a
-notification.
+notification. The Permissions box in the settings page edits one such drop-in,
+`policy.d/webgui.json`, with the same validation before anything is written and a note
+for every key the baseline locks.
 
 ### The guard: two tiers
 
