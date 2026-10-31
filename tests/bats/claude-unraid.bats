@@ -227,3 +227,61 @@ TOKEN="sk-ant-oat01-TESTTOKENTESTTOKENTESTTOKEN0123456789"
   [ "$status" -eq 0 ]
   assert_contains "$output" "token set"
 }
+
+@test "status reports the data directory size and the managed CLAUDE.md" {
+  local dd="$FAKEROOT/mnt/user/appdata/$PLUGIN" jg="$REPO_ROOT/tests/helpers/json-get.php"
+  mkdir -p "$dd/config/projects/p1" "$dd/work/server"
+  head -c 2048 /dev/zero >"$dd/config/projects/p1/t.jsonl"
+  head -c 1024 /dev/zero >"$dd/work/server/notes.md"
+  run "$CU" status --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" >"$BATS_TEST_TMPDIR/s.json"
+  local bytes tbytes
+  bytes=$(php "$jg" "$BATS_TEST_TMPDIR/s.json" data_dir.bytes)
+  tbytes=$(php "$jg" "$BATS_TEST_TMPDIR/s.json" data_dir.transcripts_bytes)
+  [ "$bytes" -ge 3072 ] && [ "$bytes" -lt 3072000 ]
+  [ "$tbytes" -ge 2048 ] && [ "$tbytes" -lt 2048000 ]
+  [ "$(php "$jg" "$BATS_TEST_TMPDIR/s.json" claude_md)" = false ]
+  run "$CU" status
+  assert_contains "$output" "data size:     "
+  assert_contains "$output" " (transcripts "
+  assert_contains "$output" "context file:  none"
+  printf '<!-- claude-code-unraid managed CLAUDE.md -->\n# x\n' >"$FAKEROOT/etc/claude-code/CLAUDE.md"
+  run "$CU" status --json
+  assert_contains "$output" '"claude_md": true'
+  run "$CU" status
+  assert_contains "$output" "context file:  /etc/claude-code/CLAUDE.md"
+  # no data directory: sizes are null, nothing breaks
+  rm -rf "$dd"
+  run "$CU" status --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" >"$BATS_TEST_TMPDIR/s2.json"
+  [ "$(php "$jg" "$BATS_TEST_TMPDIR/s2.json" data_dir.bytes)" = null ]
+}
+
+@test "workspaces lists the directories of the current work dir with their session state" {
+  local wd="$FAKEROOT/tmp/$PLUGIN/fallback-work" jg="$REPO_ROOT/tests/helpers/json-get.php"
+  run "$CU" workspaces
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "no workspaces in /tmp/$PLUGIN/fallback-work"
+  mkdir -p "$wd/server" "$wd/media.tools_2" "$wd/.hidden" "$wd/Bad Name"
+  ln -s "$wd/server" "$wd/alias"
+  run "$CU" workspaces
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "WORKSPACE"
+  assert_contains "$output" "/tmp/$PLUGIN/fallback-work/server"
+  assert_contains "$output" "/tmp/$PLUGIN/fallback-work/media.tools_2"
+  assert_not_contains "$output" ".hidden"
+  assert_not_contains "$output" "Bad Name"
+  assert_not_contains "$output" "alias"
+  run "$CU" workspaces --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" >"$BATS_TEST_TMPDIR/w.json"
+  [ "$(php "$jg" "$BATS_TEST_TMPDIR/w.json" work_dir)" = "\"/tmp/$PLUGIN/fallback-work\"" ]
+  [ "$(php "$jg" "$BATS_TEST_TMPDIR/w.json" workspaces.0)" = "\"media.tools_2|/tmp/$PLUGIN/fallback-work/media.tools_2|$(stat -c %Y "$wd/media.tools_2")|-\"" ]
+  [ "$(php "$jg" "$BATS_TEST_TMPDIR/w.json" workspaces.2)" = MISSING ]
+  run "$CU" status --json
+  assert_contains "$output" "server|/tmp/$PLUGIN/fallback-work/server|$(stat -c %Y "$wd/server")|-"
+  run "$CU" status
+  assert_contains "$output" "workspaces:    media.tools_2 server"
+}

@@ -2,6 +2,7 @@
 # claude-unraid: helper CLI for the claude-code-unraid plugin (SPEC section 11).
 #
 #   claude-unraid status [--json]     plugin, binary, tmux, mode, data dir, auth, policy
+#   claude-unraid workspaces [--json] the workspaces of the current work dir, with session state
 #   claude-unraid work <name>         create a workspace and print how to use it
 #   claude-unraid token set [--stdin] store the emergency token (read from stdin)
 #   claude-unraid token clear         delete it
@@ -29,6 +30,31 @@ CCU_SCRIPT_NAME=claude-unraid
 SCRIPTS="$PLUGIN_DIR/scripts"
 TOKEN_FILE="$FLASH_DIR/emergency-token"
 WORKSPACE_RE='^[a-z0-9][a-z0-9._-]{0,47}$'
+
+# dir_bytes DIR: apparent size in bytes, one filesystem, bounded; empty when unknown
+dir_bytes() {
+  run_with_timeout 10 du -sxb -- "$1" 2>/dev/null | cut -f1
+}
+
+# human_bytes BYTES: "1.5 GiB" style; "unknown" for anything but digits
+human_bytes() {
+  local b=$1 u=0 whole frac=0 units=(B KiB MiB GiB TiB)
+  if ! [[ "$b" =~ ^[0-9]+$ ]]; then
+    printf 'unknown'
+    return 0
+  fi
+  whole=$b
+  while [ "$whole" -ge 1024 ] && [ "$u" -lt 4 ]; do
+    frac=$(((whole % 1024) * 10 / 1024))
+    whole=$((whole / 1024))
+    u=$((u + 1))
+  done
+  if [ "$u" -eq 0 ]; then
+    printf '%d B' "$whole"
+  else
+    printf '%d.%d %s' "$whole" "$frac" "${units[$u]}"
+  fi
+}
 
 usage() {
   sed -n '2,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "$0"
@@ -124,6 +150,13 @@ cmd_status() {
       FUSE=*) dd_fuse=${line#FUSE=} ;;
     esac
   done < <("$SCRIPTS/data-dir" --check 2>/dev/null || true)
+  local dd_bytes="" dd_transcripts=""
+  if [ "$dd_valid" = yes ] && [ -d "$ROOT$dd_path" ]; then
+    dd_bytes=$(dir_bytes "$ROOT$dd_path")
+    [ -d "$ROOT$dd_path/config/projects" ] && dd_transcripts=$(dir_bytes "$ROOT$dd_path/config/projects")
+  fi
+  local claude_md=no
+  [ -f "$ETC_CLAUDE/CLAUDE.md" ] && claude_md=yes
   login=$(login_present "$config_dir")
   token_present=no
   is_regular_nonlink "$TOKEN_FILE" && token_present=yes
@@ -146,9 +179,13 @@ cmd_status() {
       printf 'data_dir.valid=@bool:%s\n' "$dd_valid"
       printf 'data_dir.fuse=@bool:%s\n' "$dd_fuse"
       printf 'data_dir.reason=%s\n' "$dd_reason"
+      # "@int:N" when known, "@null" otherwise
+      printf 'data_dir.bytes=%s\n' "${dd_bytes:+@int:}${dd_bytes:-@null}"
+      printf 'data_dir.transcripts_bytes=%s\n' "${dd_transcripts:+@int:}${dd_transcripts:-@null}"
       printf 'auth.login=@bool:%s\n' "$login"
       printf 'auth.emergency_token=@bool:%s\n' "$token_present"
       printf 'flash_exported=@bool:%s\n' "$exported"
+      printf 'claude_md=@bool:%s\n' "$claude_md"
       for f in "$POLICY_DIR"/*.json; do
         [ -f "$f" ] && printf 'policy_files[]=%s\n' "$(basename -- "$f")"
       done
@@ -158,6 +195,11 @@ cmd_status() {
         printf 'sessions[]=%s
 ' "$sws|$sstate|$sid|$sstarted"
       done < <(sessions_tsv)
+      local wname wpath wmtime wstate
+      while IFS=$'\t' read -r wname wpath wmtime wstate; do
+        [ -n "$wname" ] || continue
+        printf 'workspaces[]=%s|%s|%s|%s\n' "$wname" "$wpath" "$wmtime" "$wstate"
+      done < <(workspaces_tsv)
     } | "$SCRIPTS/kv2json"
     return 0
   fi
@@ -181,6 +223,9 @@ cmd_status() {
   else
     printf 'data dir:      %s (NOT USABLE: %s)\n' "$dd_path" "$dd_reason"
   fi
+  if [ -n "$dd_bytes" ]; then
+    printf 'data size:     %s%s\n' "$(human_bytes "$dd_bytes")" "${dd_transcripts:+ (transcripts $(human_bytes "$dd_transcripts"))}"
+  fi
   printf 'login:         %s\n' "$login"
   printf 'emergency tok: %s\n' "$token_present"
   printf 'flash export:  %s\n' "$exported"
@@ -193,6 +238,11 @@ cmd_status() {
   done
   [ "$any" = 1 ] || printf 'none'
   printf '\n'
+  if [ "$claude_md" = yes ]; then
+    printf 'context file:  %s/CLAUDE.md\n' "${ETC_CLAUDE#"$ROOT"}"
+  else
+    printf 'context file:  none\n'
+  fi
   printf 'sessions:      '
   local sws sstate sid sstarted sn=0
   while IFS=$'	' read -r sws sstate sid sstarted; do
@@ -201,8 +251,61 @@ cmd_status() {
     sn=$((sn + 1))
   done < <(sessions_tsv)
   [ "$sn" -gt 0 ] || printf 'none'
-  printf '
-'
+  printf '\n'
+  printf 'workspaces:    '
+  local wname wpath wmtime wstate wn=0
+  while IFS=$'\t' read -r wname wpath wmtime wstate; do
+    [ -n "$wname" ] || continue
+    printf '%s ' "$wname"
+    wn=$((wn + 1))
+  done < <(workspaces_tsv)
+  [ "$wn" -gt 0 ] || printf 'none'
+  printf '\n'
+}
+
+# ---------------------------------------------------------------------------
+# workspaces_tsv: name<TAB>path<TAB>mtime<TAB>state for every directory of the
+# current work dir whose name is a workspace name (other names and symlinks are
+# skipped); state is the supervised session's state or "-".
+workspaces_tsv() {
+  local work_dir d name sws sstate sid sstarted
+  work_dir=$("$SCRIPTS/mode" work-dir)
+  [ -d "$ROOT$work_dir" ] || return 0
+  declare -A running=()
+  while IFS=$'\t' read -r sws sstate sid sstarted; do
+    [ -n "$sws" ] && running[$sws]=$sstate
+  done < <(sessions_tsv)
+  for d in "$ROOT$work_dir"/*/; do
+    d=${d%/}
+    if [ ! -d "$d" ] || [ -L "$d" ]; then
+      continue
+    fi
+    name=$(basename -- "$d")
+    [[ "$name" =~ $WORKSPACE_RE ]] || continue
+    printf '%s\t%s\t%s\t%s\n' "$name" "$work_dir/$name" "$(stat -c %Y -- "$d" 2>/dev/null || echo 0)" "${running[$name]:--}"
+  done
+}
+
+cmd_workspaces() {
+  local json=0 wname wpath wmtime wstate n=0
+  [ "${1:-}" = --json ] && json=1
+  if [ "$json" = 1 ]; then
+    {
+      printf 'work_dir=%s\n' "$("$SCRIPTS/mode" work-dir)"
+      while IFS=$'\t' read -r wname wpath wmtime wstate; do
+        [ -n "$wname" ] || continue
+        printf 'workspaces[]=%s|%s|%s|%s\n' "$wname" "$wpath" "$wmtime" "$wstate"
+      done < <(workspaces_tsv)
+    } | "$SCRIPTS/kv2json"
+    return 0
+  fi
+  printf '%-20s %-8s %-17s %s\n' WORKSPACE SESSION 'LAST USED' PATH
+  while IFS=$'\t' read -r wname wpath wmtime wstate; do
+    [ -n "$wname" ] || continue
+    printf '%-20s %-8s %-17s %s\n' "$wname" "$wstate" "$(date -d "@$wmtime" +'%Y-%m-%d %H:%M' 2>/dev/null || echo -)" "$wpath"
+    n=$((n + 1))
+  done < <(workspaces_tsv)
+  [ "$n" -gt 0 ] || printf '(no workspaces in %s; create one with: claude-unraid work <name>)\n' "$("$SCRIPTS/mode" work-dir)"
 }
 
 # ---------------------------------------------------------------------------
@@ -786,6 +889,10 @@ case "${1:-}" in
     cmd_attach "$@"
     ;;
   list) cmd_list ;;
+  workspaces)
+    shift
+    cmd_workspaces "$@"
+    ;;
   restore)
     shift
     cmd_restore "$@"

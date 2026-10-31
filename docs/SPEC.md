@@ -193,8 +193,10 @@ The settings page edits one of them, `policy.d/webgui.json` (installed as `50-us
 
 | Command | Purpose |
 |---|---|
-| `status [--json]` | Plugin version, Claude version, verify state, tmux state, mode, DATA_DIR, auth present yes/no (never print the token), policy files loaded, sessions |
+| `status [--json]` | Plugin version, Claude version, verify state, tmux state, mode, DATA_DIR with its apparent size and the transcripts' share of it (`data_dir.bytes`, `data_dir.transcripts_bytes`; `du -sxb` bounded to 10 s, null when unknown), auth present yes/no (never print the token), policy files loaded, managed CLAUDE.md present (`claude_md`), sessions, workspaces |
+| `workspaces [--json]` | The directories of the current work dir whose names are workspace names, each with its path, mtime and supervised session state (`name\|path\|mtime\|state` in JSON, like `sessions`); symlinks and other names are skipped |
 | `work <name>` | Create a workspace and `cd` hint (prints the path; can't change the parent shell's cwd) |
+| `doctor` | Self-checks (PASS/WARN/FAIL lines) followed by `claude doctor` through the launcher; exit 1 when a check failed |
 | `start <ws> [--remote-control]` / `stop <ws>\|--all [--timeout N]` / `attach <ws>` / `list` | Supervised sessions |
 | `restore` | Run the restore step manually |
 | `token set` / `token clear` / `token status` | Emergency token (reads from stdin, never args) |
