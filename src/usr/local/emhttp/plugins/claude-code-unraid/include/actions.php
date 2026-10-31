@@ -17,8 +17,9 @@ declare(strict_types=1);
 require_once __DIR__ . '/status.php';
 require_once __DIR__ . '/policy.php';
 
-const CCU_ACTIONS = ['status', 'verify', 'restore', 'stop-all', 'log', 'policy-save'];
+const CCU_ACTIONS = ['status', 'verify', 'restore', 'stop-all', 'log', 'policy-save', 'doctor', 'audit'];
 const CCU_LOG_LINES = 200;
+const CCU_AUDIT_TAG = 'claude-code-unraid-audit'; // the audit hook's syslog tag
 const CCU_LOG_MAX_BYTES = 524288; // same cap as lib.sh LOG_MAX_BYTES
 
 function ccu_run_action(string $action, array $params = []): array
@@ -39,6 +40,13 @@ function ccu_run_action(string $action, array $params = []): array
         case 'verify':
             [$rc, $out] = ccu_run_helper(['verify'], 60);
             return ['ok' => $rc === 0, 'action' => 'verify', 'rc' => $rc, 'output' => $out];
+        case 'doctor':
+            // self-checks plus `claude doctor`; the helper bounds the latter itself
+            [$rc, $out] = ccu_run_helper(['doctor'], 60);
+            return ['ok' => $rc === 0, 'action' => 'doctor', 'rc' => $rc, 'output' => $out];
+        case 'audit':
+            // the audit hook's lines, already redacted when they were written
+            return ['ok' => true, 'action' => 'audit', 'lines' => ccu_tail_matching($root . '/var/log/syslog', CCU_AUDIT_TAG, CCU_LOG_LINES)];
         case 'stop-all':
             [$rc, $out] = ccu_run_helper(['stop', '--all', '--timeout', '10'], 20);
             return ['ok' => $rc === 0, 'action' => 'stop-all', 'rc' => $rc, 'output' => $out];

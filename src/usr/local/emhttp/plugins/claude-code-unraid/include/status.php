@@ -62,6 +62,65 @@ function ccu_yesno(mixed $v): string
     return $v === true || $v === 'yes' ? 'yes' : 'no';
 }
 
+/** 12345678 -> "11.8 MiB"; anything but a non-negative int -> "unknown" */
+function ccu_bytes(mixed $bytes): string
+{
+    if (!is_int($bytes) || $bytes < 0) {
+        return 'unknown';
+    }
+    $units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+    $v = (float) $bytes;
+    $u = 0;
+    while ($v >= 1024 && $u < count($units) - 1) {
+        $v /= 1024;
+        $u++;
+    }
+    return $u === 0 ? sprintf('%d B', $bytes) : sprintf('%.1f %s', $v, $units[$u]);
+}
+
+/** Only this much of a log file is read for a tail, counted from its end. */
+const CCU_TAIL_WINDOW = 4194304;
+
+/**
+ * The last $max lines of $file that contain $needle, control characters
+ * removed. A file larger than CCU_TAIL_WINDOW is read from its tail only, and
+ * the partial line at the cut is dropped.
+ *
+ * @return list<string>
+ */
+function ccu_tail_matching(string $file, string $needle, int $max): array
+{
+    if (!is_readable($file)) {
+        return [];
+    }
+    $fh = @fopen($file, 'rb');
+    if ($fh === false) {
+        return [];
+    }
+    $size = (int) @filesize($file);
+    $cut = false;
+    if ($size > CCU_TAIL_WINDOW) {
+        fseek($fh, $size - CCU_TAIL_WINDOW);
+        $cut = true;
+    }
+    $data = stream_get_contents($fh);
+    fclose($fh);
+    if ($data === false) {
+        return [];
+    }
+    $lines = explode("\n", $data);
+    if ($cut) {
+        array_shift($lines);
+    }
+    $out = [];
+    foreach ($lines as $line) {
+        if ($line !== '' && str_contains($line, $needle)) {
+            $out[] = preg_replace('/[\x00-\x08\x0b-\x1f\x7f]/', '', rtrim($line, "\r")) ?? '';
+        }
+    }
+    return array_values(array_slice($out, -$max));
+}
+
 /** The plugin cfg, user values over defaults, without sourcing anything. */
 function ccu_cfg(): array
 {
