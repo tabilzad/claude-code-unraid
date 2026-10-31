@@ -58,11 +58,14 @@ gh api -X PUT repos/tabilzad/claude-code-unraid/actions/permissions/workflow \
   -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true
 ```
 
-The workflow labels the PR `claude-code-bump` when that label exists. Pull requests
-opened with the default `GITHUB_TOKEN` do not trigger CI. Configure a fine-grained
+The workflow labels the PR `claude-code-bump` when that label exists. CI on a pull
+request opened with the default `GITHUB_TOKEN` is held until a maintainer approves it
+("Approve and run" on the PR, or
+`gh api -X POST repos/tabilzad/claude-code-unraid/actions/runs/<run id>/approve`),
+because `github-actions[bot]` counts as an outside contributor. Configure a fine-grained
 personal access token with `contents: write` and `pull-requests: write` as the
-`BUMP_TOKEN` repository secret if CI should run on bump PRs automatically; with the
-secret in place the setting above is not needed.
+`BUMP_TOKEN` repository secret if CI should run on bump PRs without that step; with the
+secret in place the setting above is not needed either.
 
 ## Packaging
 

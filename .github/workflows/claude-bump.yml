@@ -9,12 +9,12 @@ name: Claude Code bump
 # Note: the default GITHUB_TOKEN can open the pull request only when the
 # repository setting "Allow GitHub Actions to create and approve pull requests"
 # (Settings, Actions, General) is enabled; otherwise `gh pr create` fails with
-# "GitHub Actions is not permitted to create or approve pull requests". Pull
-# requests opened with that token also do not trigger other workflows, so CI
-# runs on the PR only after it is pushed to again or when a repository secret
-# BUMP_TOKEN (a fine-grained PAT with contents and pull-requests write) is
-# configured, which needs neither the setting nor the extra push.
-# docs/RELEASING.md, "Automatic bump proposals", has the details.
+# "GitHub Actions is not permitted to create or approve pull requests". CI on a
+# pull request opened with that token is held until a maintainer approves the
+# run ("Approve and run" on the PR). A repository secret BUMP_TOKEN (a
+# fine-grained PAT with contents and pull-requests write) needs neither the
+# setting nor the approval. docs/RELEASING.md, "Automatic bump proposals", has
+# the details.
 
 on:
   schedule:
