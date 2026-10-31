@@ -147,3 +147,33 @@ get() { php "$JG" "$1" "$2"; }
   [ "$status" -eq 0 ]
   [ "$(get "$PLUGIN_SRC/policy/99-baseline.json.in" permissions.defaultMode)" = '"default"' ]
 }
+
+@test "writes the managed CLAUDE.md, removes it when disabled, never touches a foreign one" {
+  local md="$FAKEROOT/etc/claude-code/CLAUDE.md"
+  run "$IP"
+  [ "$status" -eq 0 ]
+  [ -f "$md" ]
+  assert_file_mode "$md" 644
+  head -n1 "$md" | grep -q 'claude-code-unraid managed CLAUDE.md'
+  grep -q '/mnt/user' "$md"
+  cmp -s "$md" "$PLUGIN_SRC/policy/CLAUDE.md"
+  # unchanged content is not rewritten
+  local before
+  before=$(stat -c %Y "$md")
+  sleep 1
+  run "$IP"
+  [ "$(stat -c %Y "$md")" = "$before" ]
+  printf 'MANAGED_CLAUDE_MD="no"\n' >"$CFG"
+  run "$IP"
+  [ "$status" -eq 0 ]
+  [ ! -e "$md" ]
+  printf '# someone else\n' >"$md"
+  printf 'MANAGED_CLAUDE_MD="yes"\n' >"$CFG"
+  run "$IP"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$md")" = "# someone else" ]
+  assert_contains "$(cat "$FAKEROOT/var/log/$PLUGIN/install.log")" "not replacing"
+  printf 'MANAGED_CLAUDE_MD="no"\n' >"$CFG"
+  run "$IP"
+  [ "$(cat "$md")" = "# someone else" ]
+}

@@ -30,6 +30,10 @@ fi
 rm -rf -- "${LIB_DIR:?}" "${RUN_DIR:?}" "${FALLBACK_ROOT:?}" "${LOG_DIR:?}" "${EMHTTP_DIR:?}"
 rm -f -- "$BIN_LAUNCHER" "$BIN_HELPER"
 rm -f -- "$POLICY_DIR/99-$PLUGIN-baseline.json" "$POLICY_DIR"/50-user-*.json
+# the managed CLAUDE.md, only when it carries our marker line
+if [ -f "$ETC_CLAUDE/CLAUDE.md" ] && head -n1 -- "$ETC_CLAUDE/CLAUDE.md" | grep -qF -- "claude-code-unraid managed CLAUDE.md"; then
+  rm -f -- "$ETC_CLAUDE/CLAUDE.md"
+fi
 rmdir -- "$POLICY_DIR" "$ETC_CLAUDE" 2>/dev/null || true
 
 # 4. Flash caches (the big ones). Settings and drop-ins stay.

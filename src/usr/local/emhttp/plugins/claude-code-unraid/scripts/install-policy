@@ -6,6 +6,10 @@
 #       (ALLOW_AUTO_MODE, REMOTE_CONTROL, CLEANUP_DAYS); loads last, wins
 #   /etc/claude-code/managed-settings.d/50-user-<name>.json
 #       one per valid /boot/config/plugins/<plugin>/policy.d/<name>.json
+#   /etc/claude-code/CLAUDE.md
+#       Unraid context for every session, from policy/CLAUDE.md, unless the
+#       cfg says MANAGED_CLAUDE_MD="no"; a file without our marker line is
+#       never replaced or removed
 #
 # Runs at install, on every boot, and when the settings are saved in the
 # WebGUI. Every file is validated before it is written (a managed drop-in that
@@ -97,5 +101,29 @@ for old in "$POLICY_DIR"/50-user-*.json; do
     log info "removed stale policy drop-in ${old##*/}"
   fi
 done
+
+# 4. Managed CLAUDE.md (SPEC section 9): guidance for every session, never policy.
+CLAUDE_MD_SRC="$POLICY_SRC/CLAUDE.md"
+CLAUDE_MD="$ETC_CLAUDE/CLAUDE.md"
+CLAUDE_MD_MARK="claude-code-unraid managed CLAUDE.md"
+marked_claude_md() { # FILE: starts with our marker line
+  [ -f "$1" ] && head -n1 -- "$1" | grep -qF -- "$CLAUDE_MD_MARK"
+}
+if [ "$(cfg_bool MANAGED_CLAUDE_MD yes)" = yes ]; then
+  if ! marked_claude_md "$CLAUDE_MD_SRC"; then
+    log err "managed CLAUDE.md template missing or unmarked at ${CLAUDE_MD_SRC#"$ROOT"}; nothing written"
+  elif [ -f "$CLAUDE_MD" ] && ! marked_claude_md "$CLAUDE_MD"; then
+    log warning "not replacing ${CLAUDE_MD#"$ROOT"}: it was not written by this plugin"
+  elif ! cmp -s -- "$CLAUDE_MD_SRC" "$CLAUDE_MD"; then
+    if atomic_write "$CLAUDE_MD" 0644 <"$CLAUDE_MD_SRC"; then
+      log info "managed CLAUDE.md written to ${CLAUDE_MD#"$ROOT"}"
+    else
+      log err "could not write ${CLAUDE_MD#"$ROOT"}"
+    fi
+  fi
+elif marked_claude_md "$CLAUDE_MD"; then
+  rm -f -- "$CLAUDE_MD"
+  log info "managed CLAUDE.md removed (MANAGED_CLAUDE_MD is no)"
+fi
 
 exit 0

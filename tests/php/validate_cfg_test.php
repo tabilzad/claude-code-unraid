@@ -88,3 +88,13 @@ function test_non_string_values_are_rejected(): void
     $r = ccu_validate_cfg(['DATA_DIR' => ['a' => 'b']], ok_checker());
     assert_same(false, $r['save']);
 }
+
+function test_managed_claude_md_is_a_yes_no_switch(): void
+{
+    $r = ccu_validate_cfg(['MANAGED_CLAUDE_MD' => 'No'], ok_checker());
+    assert_same(true, $r['save']);
+    assert_same('no', $r['post']['MANAGED_CLAUDE_MD']);
+    $r = ccu_validate_cfg(['MANAGED_CLAUDE_MD' => 'sometimes'], ok_checker());
+    assert_same(false, $r['save']);
+    assert_contains('MANAGED_CLAUDE_MD must be yes or no', implode("\n", $r['messages']));
+}

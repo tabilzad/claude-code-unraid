@@ -41,6 +41,16 @@ notification. The Permissions box in the settings page edits one such drop-in,
 `policy.d/webgui.json`, with the same validation before anything is written and a note
 for every key the baseline locks.
 
+### The managed CLAUDE.md
+
+Unless turned off in the settings, the plugin also keeps `/etc/claude-code/CLAUDE.md`, a
+short Unraid primer Claude Code loads before every other CLAUDE.md: the share layout, the
+rule that a new top-level directory under `/mnt/user` or a pool becomes a share, the
+read-only flash drive, where state and logs live, and a request to ask before anything
+that interrupts other people. It shapes what Claude tries, not what the policy allows, so
+nothing in the security model depends on it. The plugin writes and removes only a file
+that starts with its own marker comment; one written by anything else is left alone.
+
 ### The guard: two tiers
 
 The guard looks at the whole Bash command string after a light normalisation (empty

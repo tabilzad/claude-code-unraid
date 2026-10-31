@@ -155,6 +155,8 @@ Merge semantics (documented): drop-ins load alphabetically after `managed-settin
 
 The settings page edits one of them, `policy.d/webgui.json` (installed as `50-user-webgui.json`), through the `policy-save` action of `include/exec.php` (`include/policy.php`): the text must parse as a JSON object, `permissions` must be an object and its `allow`/`ask`/`deny` members lists of strings, keys the baseline locks are reported as ignored (never rejected), the normalised JSON is written to the flash drive only when it differs from the file, an empty text or `{}` removes the file, and `install-policy` runs after every change. Nothing from the request reaches a shell.
 
+**Managed CLAUDE.md:** unless the cfg says `MANAGED_CLAUDE_MD="no"`, `install-policy` copies `policy/CLAUDE.md` to `/etc/claude-code/CLAUDE.md` (mode 0644, only when the content differs) at install and at every boot. Claude Code loads that file before every user and project CLAUDE.md, and `claudeMdExcludes` cannot skip it. It is guidance, never enforcement: the Unraid layout (`/mnt/user`, pools, disks, appdata), the share-creation trap, the read-only flash drive and the RAM root, where state and logs live, and how to behave on a server other people depend on. The template starts with a marker comment (`claude-code-unraid managed CLAUDE.md`); a `/etc/claude-code/CLAUDE.md` without the marker is never replaced or removed, `MANAGED_CLAUDE_MD="no"` removes only a marked file, and `remove` does the same. `status` reports the file as `context file` (`claude_md` in JSON).
+
 **Guard** (`policy/guard`, PHP): two tiers, adapted from `mygrexit/claude-unraid-manager` `claude-guard` (MIT, with attribution in NOTICE).
 - **Block (exit 2):**
   - `mkfs*`, `wipefs`, `shred`
@@ -222,6 +224,7 @@ ALLOW_AUTO_MODE="no"
 ALLOW_BOOT_RW="no"
 REMOTE_CONTROL="no"
 EVENT_TIMEOUT="20"
+MANAGED_CLAUDE_MD="yes"  # install /etc/claude-code/CLAUDE.md with Unraid context (section 9)
 ```
 
 ## 14. Notifications

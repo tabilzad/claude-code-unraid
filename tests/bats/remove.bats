@@ -27,6 +27,7 @@ populate_full_install() {
   printf '{}' >"$POLICY/99-$PLUGIN-baseline.json"
   printf '{}' >"$POLICY/50-user-mine.json"
   printf '{}' >"$POLICY/10-other-plugin.json"
+  printf '<!-- claude-code-unraid managed CLAUDE.md -->\n# x\n' >"$FAKEROOT/etc/claude-code/CLAUDE.md"
   printf 'pkg' >"$FLASH/bin/claude-1.2.3"
   printf 'pkg' >"$FLASH/pkg/$PLUGIN-2026.01.02.3-noarch-1.txz"
   printf 'DATA_DIR="%s"
@@ -49,6 +50,7 @@ populate_full_install() {
   [ ! -e "$POLICY/99-$PLUGIN-baseline.json" ]
   [ ! -e "$POLICY/50-user-mine.json" ]
   [ -e "$POLICY/10-other-plugin.json" ]
+  [ ! -e "$FAKEROOT/etc/claude-code/CLAUDE.md" ]
   [ ! -e "$FLASH/bin" ]
   [ ! -e "$FLASH/pkg" ]
   [ -f "$FLASH/$PLUGIN.cfg" ]
@@ -59,6 +61,14 @@ populate_full_install() {
   assert_contains "$output" "policy.d"
   assert_contains "$output" "emergency-token"
   assert_contains "$output" "/mnt/cache/appdata/$PLUGIN"
+}
+
+@test "a CLAUDE.md that is not ours stays" {
+  populate_full_install
+  printf '# mine\n' >"$FAKEROOT/etc/claude-code/CLAUDE.md"
+  run "$SCRIPT_UNDER_TEST"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$FAKEROOT/etc/claude-code/CLAUDE.md")" = "# mine" ]
 }
 
 @test "the policy directory is removed only when nothing else is left in it" {

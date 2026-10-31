@@ -12,7 +12,7 @@
  */
 declare(strict_types=1);
 
-const CCU_CFG_KEYS = ['DATA_DIR', 'CHANNEL', 'RESTORE_SESSIONS', 'MAX_RESTORE', 'CLEANUP_DAYS', 'ALLOW_AUTO_MODE', 'ALLOW_BOOT_RW', 'REMOTE_CONTROL', 'EVENT_TIMEOUT'];
+const CCU_CFG_KEYS = ['DATA_DIR', 'CHANNEL', 'RESTORE_SESSIONS', 'MAX_RESTORE', 'CLEANUP_DAYS', 'ALLOW_AUTO_MODE', 'ALLOW_BOOT_RW', 'REMOTE_CONTROL', 'EVENT_TIMEOUT', 'MANAGED_CLAUDE_MD'];
 
 function ccu_validate_cfg(array $post, callable $dataDirCheck): array
 {
@@ -36,7 +36,7 @@ function ccu_validate_cfg(array $post, callable $dataDirCheck): array
         $clean[$key] = trim(preg_replace('/[\x00-\x1f\x7f]/', '', $value) ?? '');
     }
 
-    foreach (['RESTORE_SESSIONS', 'ALLOW_AUTO_MODE', 'ALLOW_BOOT_RW', 'REMOTE_CONTROL'] as $k) {
+    foreach (['RESTORE_SESSIONS', 'ALLOW_AUTO_MODE', 'ALLOW_BOOT_RW', 'REMOTE_CONTROL', 'MANAGED_CLAUDE_MD'] as $k) {
         if (array_key_exists($k, $clean)) {
             $v = strtolower($clean[$k]);
             if (!in_array($v, ['yes', 'no'], true)) {
