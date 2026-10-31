@@ -42,7 +42,7 @@ event_body() {
   chmod 0700 -- "$ROOT$dd/config" 2>/dev/null || true
   chmod 0755 -- "$ROOT$dd/work" "$ROOT$dd/work/server" 2>/dev/null || true
 
-  local fallback_cfg="$RUN_DIR/fallback-config"
+  local fallback_cfg="$FALLBACK_ROOT/fallback-config"
   if [ -s "$fallback_cfg/.credentials.json" ] && [ ! -s "$ROOT$dd/config/.credentials.json" ]; then
     log notice "a login was made in fallback mode; run 'claude-unraid migrate-login' to keep it"
     notify normal "Claude Code: keep the login you made before the array started?" "You logged in while the array was stopped. To carry that login over to the persistent configuration, run: claude-unraid migrate-login"

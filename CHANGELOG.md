@@ -7,6 +7,18 @@ below is the release tag.
 
 ## [Unreleased]
 
+## [0.1.0-beta.2] - 2026-10-31
+
+### Fixed
+
+- The Claude Code download failed on real Unraid hardware: the temporary file was
+  written under `/run`, which Unraid mounts as a 32 MiB tmpfs. Downloads now go next to
+  their cache on the flash drive, which the free-space check already covers, and the
+  error message carries the downloader's exit code and last line.
+- Fallback mode kept Claude's config, login and transcripts under that same 32 MiB
+  `/run`. They now live in `/tmp/claude-code-unraid` (RAM, mode 0700), so a long
+  recovery session can no longer fill `/run` for the rest of the system.
+
 ## [0.1.0-beta.1] - 2026-10-31
 
 First public beta. Everything below is new.

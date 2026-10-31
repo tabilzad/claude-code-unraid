@@ -198,7 +198,7 @@ setup() {
   CCU_FAKE_FREE_KB=1 run fetch_verified thing "file://$bucket/thing" "$sha" 1048576 "$cache"
   [ "$status" -ne 0 ]
   [ ! -e "$cache" ]
-  [ -z "$(find "$RUN_DIR" -maxdepth 1 -name 'dl.*')" ]
+  [ -z "$(find "$RUN_DIR" "$FLASH_DIR/bin" -maxdepth 1 -name '*dl.*')" ]
 }
 
 @test "fetch_verified refuses a symlink in the cache slot" {
@@ -226,4 +226,29 @@ setup() {
   run install_ram_copy "$FAKEROOT/src" "$LIB_DIR/claude-3" "0000000000000000000000000000000000000000000000000000000000000000" 0755
   [ "$status" -ne 0 ]
   [ ! -e "$LIB_DIR/claude-3" ]
+}
+
+@test "fetch_verified downloads next to the cache, never under /run, and reports the downloader's error" {
+  # Unraid mounts /run as a 32 MiB tmpfs: the first beta failed there with a
+  # 292 MB binary. The temporary file must live in the cache directory.
+  mkdir -p "$FLASH_DIR/bin"
+  touch "$FLASH_DIR/bin/.dl.stale"
+  cat >"$FAKEROOT/stubs/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'curl' >>"${FAKEROOT:?}/calls.log"
+for a in "$@"; do printf ' %q' "$a" >>"$FAKEROOT/calls.log"; done
+printf '\n' >>"$FAKEROOT/calls.log"
+echo 'curl: (23) Failure writing output to destination' >&2
+exit 23
+STUB
+  chmod 0755 "$FAKEROOT/stubs/bin/curl"
+  local rc=0
+  fetch_verified thing "https://downloads.claude.ai/claude-code-releases/9.9.9/linux-x64/claude" \
+    0000000000000000000000000000000000000000000000000000000000000000 7 "$FLASH_DIR/bin/thing" || rc=$?
+  [ "$rc" -ne 0 ]
+  assert_contains "$(calls curl)" "--output $FLASH_DIR/bin/.dl."
+  assert_contains "$FETCH_ERROR" "download failed: https://downloads.claude.ai/claude-code-releases/9.9.9/linux-x64/claude (exit 23: curl: (23) Failure writing output to destination)"
+  [ ! -e "$FLASH_DIR/bin/.dl.stale" ]
+  [ -z "$(find "$FLASH_DIR/bin" "$RUN_DIR" -maxdepth 1 -name '*dl.*' 2>/dev/null)" ]
+  [ ! -e "$FLASH_DIR/bin/thing" ]
 }

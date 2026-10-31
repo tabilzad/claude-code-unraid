@@ -27,7 +27,7 @@ if command -v removepkg >/dev/null 2>&1; then
 fi
 
 # 3. RAM: binaries, launcher, helper, policy baseline, runtime state, logs.
-rm -rf -- "${LIB_DIR:?}" "${RUN_DIR:?}" "${LOG_DIR:?}" "${EMHTTP_DIR:?}"
+rm -rf -- "${LIB_DIR:?}" "${RUN_DIR:?}" "${FALLBACK_ROOT:?}" "${LOG_DIR:?}" "${EMHTTP_DIR:?}"
 rm -f -- "$BIN_LAUNCHER" "$BIN_HELPER"
 rm -f -- "$POLICY_DIR/99-$PLUGIN-baseline.json" "$POLICY_DIR"/50-user-*.json
 rmdir -- "$POLICY_DIR" "$ETC_CLAUDE" 2>/dev/null || true

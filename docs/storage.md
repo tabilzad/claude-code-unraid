@@ -41,7 +41,7 @@ across reboots.
 
 Active from boot until the array starts, after the array stops, and whenever the data
 directory is not usable. Claude Code uses a configuration directory in RAM
-(`/run/claude-code-unraid/fallback-config`). This is what lets you use Claude Code to
+(`/tmp/claude-code-unraid/fallback-config`). This is what lets you use Claude Code to
 diagnose a server whose array will not start, which a Docker container could not do.
 
 Everything you do in fallback mode is lost when the mode switches or the server reboots:

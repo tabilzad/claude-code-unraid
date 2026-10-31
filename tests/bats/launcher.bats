@@ -65,11 +65,11 @@ dump_argv() { sed -n 's/^ARGV://p' "$DUMP"; }
   [ "$status" -eq 0 ]
   [ -f "$DUMP" ]
   [ "$(dump_argv)" = " [--version] [two words]" ]
-  [ "$(dump_env CLAUDE_CONFIG_DIR)" = "$RUN/fallback-config" ]
+  [ "$(dump_env CLAUDE_CONFIG_DIR)" = "$FAKEROOT/tmp/$PLUGIN/fallback-config" ]
   [ "$(dump_env DISABLE_UPDATES)" = 1 ]
   [ "$(dump_env DISABLE_AUTOUPDATER)" = 1 ]
   [ -z "$(dump_env CLAUDE_CODE_OAUTH_TOKEN)" ]
-  assert_file_mode "$RUN/fallback-config" 700
+  assert_file_mode "$FAKEROOT/tmp/$PLUGIN/fallback-config" 700
   assert_contains "$(calls unshare)" "--mount --propagation unchanged --"
   assert_contains "$(calls mount)" '-o remount\,bind\,ro /boot'
 }
@@ -101,7 +101,7 @@ dump_argv() { sed -n 's/^ARGV://p' "$DUMP"; }
   rm -rf "$FAKEROOT/mnt/user/appdata/$PLUGIN"
   run "$LAUNCHER"
   [ "$status" -eq 0 ]
-  [ "$(dump_env CLAUDE_CONFIG_DIR)" = "$RUN/fallback-config" ]
+  [ "$(dump_env CLAUDE_CONFIG_DIR)" = "$FAKEROOT/tmp/$PLUGIN/fallback-config" ]
   assert_contains "$output" "not available right now"
   [ "$(cat "$RUN/mode")" = pool ]
 }

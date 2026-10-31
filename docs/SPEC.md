@@ -67,7 +67,7 @@ degrade where not.
 
 **On the box:** the `.plg` carries `CLAUDE_VERSION`, `CLAUDE_SHA256`, `CLAUDE_URL` and `CLAUDE_SIZE` as entities (rendered from the lock). The installer:
 1. If `bin/claude-<ver>` exists on flash and its sha256 matches, use it.
-2. Otherwise check free flash space (refuse below `size x 1.2`), download to a `mktemp` file under `/run/PLUGIN/`, verify the sha256, move it to flash, and prune to current plus previous.
+2. Otherwise check free flash space (refuse below `size x 1.2`), download to a `mktemp` file next to the cache on the flash drive (never under `/run`, which Unraid mounts as a 32 MiB tmpfs), verify the sha256, rename it into place, and prune to current plus previous.
 3. Copy it to `/usr/local/lib/PLUGIN/claude-<ver>` through a temp name and `mv`, `chmod 0755`, and re-verify the sha256 of the RAM copy. The target must be a regular file, never a symlink.
 4. On any failure, keep the previous verified version if present (degraded mode) and raise an Unraid notification. Never fail the plg install.
 5. The binary is served uncompressed (292,232,560 bytes for 2.1.308, about 279 MiB; two cached versions use about 560 MB of flash). `zstd` is not used.
@@ -90,7 +90,7 @@ degrade where not.
 
 | Mode | When | `CLAUDE_CONFIG_DIR` | Auth | Work dir |
 |---|---|---|---|---|
-| `fallback` | boot until `disks_mounted`; after `stopping`; DATA_DIR invalid | `/run/PLUGIN/fallback-config` (tmpfs) | emergency token if enabled, else interactive login (lost on next mode switch) | `/run/PLUGIN/fallback-work` |
+| `fallback` | boot until `disks_mounted`; after `stopping`; DATA_DIR invalid | `/tmp/PLUGIN/fallback-config` (RAM, 0700; not `/run`, a 32 MiB tmpfs) | emergency token if enabled, else interactive login (lost on next mode switch) | `/tmp/PLUGIN/fallback-work` |
 | `pool` | after `disks_mounted` with DATA_DIR valid | `<DATA_DIR>/config` | normal OAuth login, persisted | `<DATA_DIR>/work/<name>` |
 
 - The mode lives in `/run/PLUGIN/mode`. Mode switches never happen under a running session: supervised sessions are stopped first, and unsupervised `claude` processes are counted and reported (section 8).

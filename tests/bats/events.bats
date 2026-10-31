@@ -75,8 +75,8 @@ bg() {
 }
 
 @test "disks_mounted asks before migrating a login made in fallback mode" {
-  mkdir -p "$RUN/fallback-config"
-  printf '{"claudeAiOauth":{}}' >"$RUN/fallback-config/.credentials.json"
+  mkdir -p "$FAKEROOT/tmp/$PLUGIN/fallback-config"
+  printf '{"claudeAiOauth":{}}' >"$FAKEROOT/tmp/$PLUGIN/fallback-config/.credentials.json"
   run "$EVENT/disks_mounted"
   [ "$status" -eq 0 ]
   assert_contains "$(calls notify)" 'migrate-login'

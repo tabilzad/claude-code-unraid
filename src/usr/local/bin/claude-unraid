@@ -302,7 +302,7 @@ cmd_verify() {
 cmd_migrate_login() {
   local force=0 src dest_dir dest
   [ "${1:-}" = --force ] && force=1
-  src="$RUN_DIR/fallback-config/.credentials.json"
+  src="$FALLBACK_ROOT/fallback-config/.credentials.json"
   [ -s "$src" ] || die "no login found in the fallback configuration ($(printf '%s' "${src#"$ROOT"}"))"
   [ "$("$SCRIPTS/mode" get)" = pool ] || die "the array is not started (fallback mode); try again once it is"
   dest_dir=$("$SCRIPTS/mode" config-dir)

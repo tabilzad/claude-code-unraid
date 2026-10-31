@@ -4,7 +4,7 @@
  * session-hook: SessionStart and SessionEnd hook (SPEC section 10).
  *
  * Records the session in the registry next to the active CLAUDE_CONFIG_DIR
- * (<DATA_DIR>/sessions.json in pool mode, /run/<plugin>/sessions.json in
+ * (<DATA_DIR>/sessions.json in pool mode, /tmp/<plugin>/sessions.json in
  * fallback mode). The workspace is derived from the cwd when it is under
  * <base>/work/. CLAUDE_CODE_UNRAID_SUPERVISED=1 and
  * CLAUDE_CODE_UNRAID_REMOTE_CONTROL=1 are set by the supervisor.

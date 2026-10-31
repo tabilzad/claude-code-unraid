@@ -87,12 +87,12 @@ get() { php "$JG" "$REG" "$1"; }
 }
 
 @test "fallback mode writes the registry next to the RAM config" {
-  mkdir -p "$FAKEROOT/run/$PLUGIN/fallback-config"
-  export CLAUDE_CONFIG_DIR="$FAKEROOT/run/$PLUGIN/fallback-config"
+  mkdir -p "$FAKEROOT/tmp/$PLUGIN/fallback-config"
+  export CLAUDE_CONFIG_DIR="$FAKEROOT/tmp/$PLUGIN/fallback-config"
   payload SessionStart sess-7 '"source":"startup"' | hook
-  [ -f "$FAKEROOT/run/$PLUGIN/sessions.json" ]
+  [ -f "$FAKEROOT/tmp/$PLUGIN/sessions.json" ]
   [ ! -e "$REG" ]
-  [ "$(php "$JG" "$FAKEROOT/run/$PLUGIN/sessions.json" sessions.0.workspace)" = null ]
+  [ "$(php "$JG" "$FAKEROOT/tmp/$PLUGIN/sessions.json" sessions.0.workspace)" = null ]
 }
 
 @test "old ended entries are pruned by CLEANUP_DAYS, flagged ones are kept" {

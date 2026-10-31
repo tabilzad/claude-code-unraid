@@ -65,8 +65,8 @@ TOKEN="sk-ant-oat01-TESTTOKENTESTTOKENTESTTOKEN0123456789"
 }
 
 @test "status reflects a persisted login and the emergency token" {
-  mkdir -p "$RUN/fallback-config"
-  printf '{"claudeAiOauth":{}}' >"$RUN/fallback-config/.credentials.json"
+  mkdir -p "$FAKEROOT/tmp/$PLUGIN/fallback-config"
+  printf '{"claudeAiOauth":{}}' >"$FAKEROOT/tmp/$PLUGIN/fallback-config/.credentials.json"
   printf '%s\n' "$TOKEN" >"$FLASH/emergency-token"
   run "$CU" status
   assert_contains "$output" "login:         yes"
@@ -87,8 +87,8 @@ TOKEN="sk-ant-oat01-TESTTOKENTESTTOKENTESTTOKEN0123456789"
 @test "work creates a workspace in the current mode's work dir" {
   run --separate-stderr "$CU" work server
   [ "$status" -eq 0 ]
-  [ "$output" = "/run/$PLUGIN/fallback-work/server" ]
-  [ -d "$RUN/fallback-work/server" ]
+  [ "$output" = "/tmp/$PLUGIN/fallback-work/server" ]
+  [ -d "$FAKEROOT/tmp/$PLUGIN/fallback-work/server" ]
   assert_contains "$stderr" "fallback mode"
   "$SCRIPTS/mode" set pool >/dev/null
   run --separate-stderr "$CU" work media.tools_2
@@ -103,7 +103,7 @@ TOKEN="sk-ant-oat01-TESTTOKENTESTTOKENTESTTOKEN0123456789"
     run "$CU" work "$name"
     [ "$status" -eq 64 ]
   done
-  [ -z "$(ls -A "$RUN/fallback-work" 2>/dev/null)" ]
+  [ -z "$(ls -A "$FAKEROOT/tmp/$PLUGIN/fallback-work" 2>/dev/null)" ]
 }
 
 @test "token set from a pipe stores it with mode 0600 and never prints it" {

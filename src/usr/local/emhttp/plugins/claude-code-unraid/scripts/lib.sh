@@ -25,6 +25,10 @@ FLASH_DIR="$ROOT/boot/config/plugins/$PLUGIN"
 EMHTTP_DIR="$ROOT/usr/local/emhttp/plugins/$PLUGIN"
 LIB_DIR="$ROOT/usr/local/lib/$PLUGIN"
 RUN_DIR="$ROOT/run/$PLUGIN"
+# Unraid mounts /run as a 32 MiB noexec tmpfs (Slackware rc.S), so only tiny
+# state lives there. RAM data that can grow (the fallback config with its
+# transcripts, fallback workspaces) lives under /tmp instead.
+FALLBACK_ROOT="$ROOT/tmp/$PLUGIN"
 LOG_DIR="$ROOT/var/log/$PLUGIN"
 ETC_CLAUDE="$ROOT/etc/claude-code"
 POLICY_DIR="$ETC_CLAUDE/managed-settings.d"
@@ -336,8 +340,8 @@ download() {
 
 # fetch_verified NAME URL SHA256 SIZE CACHE_PATH
 #   Makes CACHE_PATH hold the verified artifact: reuses it when its sha256
-#   matches, otherwise checks free space, downloads to RUN_DIR, verifies and
-#   moves it there. Writes CACHE_PATH.sha256 next to it so a later boot can
+#   matches, otherwise checks free space, downloads to a temporary file next
+#   to it, verifies and renames it into place. Writes CACHE_PATH.sha256 next to it so a later boot can
 #   trust the cached copy of an older version. Sets FETCH_SOURCE (cache|download)
 #   on success and FETCH_ERROR on failure.
 fetch_verified() {
@@ -371,16 +375,24 @@ fetch_verified() {
     fi
   fi
 
-  tmp=$(mktemp -- "$RUN_DIR/dl.XXXXXXXX") || {
-    FETCH_ERROR="cannot create a temporary file under $RUN_DIR"
+  # Download next to the cache, never under /run: Unraid mounts /run as a
+  # 32 MiB tmpfs, far too small for the binary. The free-space check above
+  # already covers this directory. A leftover from an interrupted run goes first.
+  rm -f -- "$cache_dir"/.dl.* 2>/dev/null || true
+  tmp=$(mktemp -- "$cache_dir/.dl.XXXXXXXX") || {
+    FETCH_ERROR="cannot create a temporary file under $cache_dir"
     return 1
   }
   log info "$name: downloading $url"
-  if ! download "$url" "$tmp" "$size"; then
-    rm -f -- "$tmp"
-    FETCH_ERROR="download failed: $url"
+  local rc=0 detail=""
+  download "$url" "$tmp" "$size" 2>"$tmp.err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    detail=$(tail -c 300 -- "$tmp.err" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | sed 's/^ *//; s/ *$//')
+    rm -f -- "$tmp" "$tmp.err"
+    FETCH_ERROR="download failed: $url (exit $rc${detail:+: $detail})"
     return 1
   fi
+  rm -f -- "$tmp.err"
   if ! sha256_eq "$tmp" "$sha"; then
     local got
     got=$(sha256_of "$tmp" 2>/dev/null || echo unknown)

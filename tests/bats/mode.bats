@@ -23,9 +23,9 @@ teardown() {
   [ "$status" -eq 0 ]
   [ "$output" = fallback ]
   run "$MODE" config-dir
-  [ "$output" = "/run/$PLUGIN/fallback-config" ]
+  [ "$output" = "/tmp/$PLUGIN/fallback-config" ]
   run "$MODE" work-dir
-  [ "$output" = "/run/$PLUGIN/fallback-work" ]
+  [ "$output" = "/tmp/$PLUGIN/fallback-work" ]
 }
 
 @test "set pool creates the data directories and switches" {
@@ -46,8 +46,8 @@ teardown() {
   run "$MODE" set fallback
   [ "$status" -eq 0 ]
   [ "$(cat "$RUN/mode")" = fallback ]
-  assert_file_mode "$RUN/fallback-config" 700
-  assert_file_mode "$RUN/fallback-work" 700
+  assert_file_mode "$FAKEROOT/tmp/$PLUGIN/fallback-config" 700
+  assert_file_mode "$FAKEROOT/tmp/$PLUGIN/fallback-work" 700
 }
 
 @test "set pool is refused when the data directory is not usable" {
@@ -88,7 +88,7 @@ teardown() {
   "$MODE" set pool >/dev/null
   rm -rf "$DATA"
   run "$MODE" config-dir
-  [ "$output" = "/run/$PLUGIN/fallback-config" ]
+  [ "$output" = "/tmp/$PLUGIN/fallback-config" ]
 }
 
 @test "ensure-dirs recreates what the current mode needs" {

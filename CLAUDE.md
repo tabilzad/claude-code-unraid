@@ -37,6 +37,7 @@ Edit this table once. Everything else refers to these values.
 ## Platform facts (verified; see docs/SPIKE.md for the box-level ones)
 
 - Unraid's root filesystem is RAM. Only `/boot` (FAT, USB) and `/mnt/*` (array and pools) persist.
+- `/run` is a 32 MiB `noexec` tmpfs (Slackware `rc.S`; confirmed on hardware 2026-10-31 when the first beta's binary download failed there). Only tiny state goes under `/run/PLUGIN`: pid and state files, locks, the tmux socket. Downloads go next to their flash cache; the fallback config and workspaces live under `/tmp/PLUGIN`.
 - Plugins reinstall from `/boot/config/plugins/*.plg` on every boot.
 - The plugin manager processes `<FILE>` elements in order:
   - An existing file is kept unless its `<SHA256>`/`<MD5>` mismatches, in which case it is re-downloaded.

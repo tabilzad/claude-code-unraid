@@ -65,7 +65,9 @@ section() { printf '\n===== %s =====\n' "$*"; }
   ls -la "$ROOT/usr/local/emhttp/plugins/$PLUGIN" "$ROOT/usr/local/emhttp/plugins/$PLUGIN/scripts" "$ROOT/usr/local/emhttp/plugins/$PLUGIN/event" \
     "$ROOT/usr/local/emhttp/plugins/$PLUGIN/policy" "$ROOT/usr/local/lib/$PLUGIN" "$ROOT/usr/local/lib/$PLUGIN/bin" \
     "$ROOT/boot/config/plugins/$PLUGIN" "$ROOT/boot/config/plugins/$PLUGIN/bin" "$ROOT/boot/config/plugins/$PLUGIN/pkg" \
-    "$ROOT/run/$PLUGIN" "$ROOT/run/$PLUGIN/sessions" 2>&1
+    "$ROOT/run/$PLUGIN" "$ROOT/run/$PLUGIN/sessions" "$ROOT/tmp/$PLUGIN" 2>&1
+  section "RAM filesystems (/run is a 32 MiB tmpfs on Unraid)"
+  df -h "$ROOT/run" "$ROOT/tmp" 2>/dev/null
   section "flash free space"
   df -h "$ROOT/boot" 2>/dev/null
   section "mounts"

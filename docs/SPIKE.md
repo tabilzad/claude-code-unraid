@@ -319,3 +319,11 @@ Tracked as numbered checks in `docs/TESTING.md`:
 5. `CLAUDE_CODE_OAUTH_TOKEN` in an interactive fallback-mode session.
 6. The exact message shown for `--dangerously-skip-permissions` as root with the baseline.
 7. The bundled tmux starts on Unraid.
+
+## 13. `/run` is a 32 MiB tmpfs (ON-BOX, confirmed 2026-10-31)
+
+Slackware 15.0 `rc.S` mounts `/run` with `mode=0755,size=32M,nodev,nosuid,noexec`,
+and Unraid 7 inherits it. The first beta downloaded the 292 MB binary into a
+`mktemp` file under `/run/claude-code-unraid` and failed on the maintainer's box with
+"download failed", while the 366 KB tmux package succeeded. Downloads now go next to
+the flash cache and the fallback config lives under `/tmp/claude-code-unraid`.

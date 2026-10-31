@@ -3,7 +3,7 @@
 #
 # What it adds around the real binary (SPEC section 7):
 #   - CLAUDE_CONFIG_DIR for the current storage mode (pool: <DATA_DIR>/config,
-#     fallback: /run/<plugin>/fallback-config), DISABLE_UPDATES=1 and
+#     fallback: /tmp/<plugin>/fallback-config), DISABLE_UPDATES=1 and
 #     DISABLE_AUTOUPDATER=1 (the plugin owns the version);
 #   - in fallback mode, the opt-in emergency token is passed through the
 #     environment (CLAUDE_CODE_OAUTH_TOKEN) and never as an argument;
@@ -52,16 +52,16 @@ fi
 mode=$("$PLUGIN_DIR/scripts/mode" get 2>/dev/null || echo fallback)
 config_dir=$("$PLUGIN_DIR/scripts/mode" config-dir 2>/dev/null || true)
 if [ -z "$config_dir" ]; then
-  config_dir="/run/$PLUGIN/fallback-config"
+  config_dir="/tmp/$PLUGIN/fallback-config"
 fi
 if [ "$mode" = pool ] && [ ! -d "$ROOT$config_dir" ]; then
   printf 'claude: the data directory is not available right now; using the RAM fallback config for this session.\n' >&2
-  config_dir="/run/$PLUGIN/fallback-config"
+  config_dir="/tmp/$PLUGIN/fallback-config"
   mode=fallback
 fi
 case "$config_dir" in
-  "/run/$PLUGIN/"*)
-    mkdir -p -- "$ROOT$config_dir" 2>/dev/null && chmod 0700 -- "$ROOT$config_dir" 2>/dev/null || true
+  "/tmp/$PLUGIN/"*)
+    mkdir -p -- "$ROOT$config_dir" 2>/dev/null && chmod 0700 -- "$ROOT/tmp/$PLUGIN" "$ROOT$config_dir" 2>/dev/null || true
     ;;
 esac
 export CLAUDE_CONFIG_DIR="$ROOT$config_dir"

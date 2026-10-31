@@ -11,8 +11,8 @@
 #   mode work-dir                  the directory that holds workspaces
 #   mode ensure-dirs               create the directories for the current mode
 #
-# Fallback lives in RAM under /run/<plugin>: fallback-config (0700) and
-# fallback-work (0700). Pool mode uses <DATA_DIR>/config (0700) and
+# Fallback lives in RAM under /tmp/<plugin> (never /run, a 32 MiB tmpfs on
+# Unraid): fallback-config (0700) and fallback-work (0700). Pool mode uses <DATA_DIR>/config (0700) and
 # <DATA_DIR>/work (0755).
 set -uo pipefail
 
@@ -21,8 +21,8 @@ CCU_SCRIPT_NAME=mode
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-FALLBACK_CONFIG="$RUN_DIR/fallback-config"
-FALLBACK_WORK="$RUN_DIR/fallback-work"
+FALLBACK_CONFIG="$FALLBACK_ROOT/fallback-config"
+FALLBACK_WORK="$FALLBACK_ROOT/fallback-work"
 SESSIONS_DIR="$RUN_DIR/sessions"
 
 current_mode() {
@@ -54,8 +54,12 @@ data_dir() {
 
 ensure_fallback_dirs() {
   mkdir -p -- "$RUN_DIR"
-  mkdir -p -- "$FALLBACK_CONFIG" "$FALLBACK_WORK"
-  chmod 0700 -- "$FALLBACK_CONFIG" "$FALLBACK_WORK" 2>/dev/null || true
+  if [ -L "$FALLBACK_ROOT" ]; then
+    log err "${FALLBACK_ROOT#"$ROOT"} is a symlink; refusing to use it"
+    return 1
+  fi
+  mkdir -p -- "$FALLBACK_ROOT" "$FALLBACK_CONFIG" "$FALLBACK_WORK"
+  chmod 0700 -- "$FALLBACK_ROOT" "$FALLBACK_CONFIG" "$FALLBACK_WORK" 2>/dev/null || true
 }
 
 ensure_pool_dirs() { # DATA_DIR
