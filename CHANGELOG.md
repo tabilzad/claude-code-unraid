@@ -13,6 +13,19 @@ below is the release tag.
   ask and deny rules are validated as JSON, written to the flash drive only when they
   changed, and applied with `install-policy`. Keys the baseline locks are reported as
   ignored instead of silently overridden.
+- The status shows how much the data directory holds and how much of it is transcripts,
+  in `claude-unraid status` and on the settings page.
+- "Run doctor" on the settings page runs the helper's self-checks and shows the PASS, WARN
+  and FAIL lines.
+- "View audit log" on the settings page shows the last 200 tool calls from the syslog, as
+  the audit hook redacted them.
+- A managed `/etc/claude-code/CLAUDE.md` gives every session Unraid context: the share
+  layout, the share-creation trap, the read-only flash drive, how to behave on a shared
+  server. `MANAGED_CLAUDE_MD="no"` (Settings, "Unraid context for every session") turns it
+  off; a file not written by the plugin is never touched.
+- `claude-unraid workspaces` lists the workspaces of the current work dir with their
+  last-used time and session state, and the settings page shows them with an "Open
+  terminal" button that opens Unraid's web terminal in the workspace.
 
 ## [0.1.0-beta.3] - 2026-10-31
 

@@ -79,6 +79,11 @@ claude-unraid restore               # bring back sessions that were live at shut
 Plain `claude` sessions you start by hand are left alone by the plugin: they are not stopped
 and not relaunched, only reported in the syslog when the array stops under them.
 
+Settings, Claude Code lists your workspaces with their last-used time and session state
+(`claude-unraid workspaces` does the same in a terminal). "Open terminal" next to a
+workspace opens Unraid's web terminal in that directory, so `claude` and the first `/login`
+work from the browser without SSH.
+
 ## Security model, in short
 
 - Every session starts in **Manual** mode: commands and edits prompt. Bypass mode is disabled
@@ -95,6 +100,10 @@ and not relaunched, only reported in the syslog when the array stops under them.
   read-only mount for one session, only if you allow it in the settings.
 - Read-only diagnostics (`smartctl -a`, `zpool status`, `df`, `docker ps`, ...) are
   pre-approved so that the useful stuff does not nag.
+- Every session starts with a short managed `CLAUDE.md` about Unraid: what `/mnt/user`,
+  the pools and appdata are, that a new top-level directory there becomes a share, that the
+  flash drive is read-only, and to ask before interrupting other people. Guidance only;
+  Settings, Claude Code, "Unraid context for every session" turns it off.
 - Remote Control (driving the session from claude.ai or the Claude app) is disabled unless
   you enable it.
 
@@ -162,7 +171,9 @@ claude-unraid verify                   # re-hash the installed binary against th
 /usr/local/emhttp/plugins/claude-code-unraid/scripts/collect-diagnostics
 ```
 
-The last command writes a redacted report under `/tmp` for a bug report. Logs:
+The last command writes a redacted report under `/tmp` for a bug report. The settings page
+has the same self-check behind "Run doctor", and "View audit log" shows the last 200 tool
+calls Claude made (command text redacted and truncated, never the output). Logs:
 `/var/log/claude-code-unraid/install.log` (also the "View log" button on the settings page)
 and the `claude-code-unraid` lines in `/var/log/syslog`. Issues:
 <https://github.com/tabilzad/claude-code-unraid/issues>.

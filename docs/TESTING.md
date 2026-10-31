@@ -114,7 +114,12 @@ with `TXZ_URL=http://<ws>:8000/<package>.txz` passed to `make build`).
     `/etc/claude-code/managed-settings.d/99-claude-code-unraid-baseline.json` now has
     `"cleanupPeriodDays": 30`; set the data directory to `/mnt/user/newshare` and Apply:
     the progress window shows `DATA_DIR not usable` and the cfg is unchanged. Buttons:
-    Verify binary (OK), View log (window opens). CSRF:
+    Verify binary (OK), Run doctor (PASS lines, no FAIL), View log (window opens), View
+    audit log (the tool calls from step 7, commands redacted). The Workspaces table lists
+    the workspace from step 5 and "Open terminal" opens a web terminal whose prompt is in
+    that directory. Set "Unraid context for every session" to No and Apply:
+    `/etc/claude-code/CLAUDE.md` is gone; back to Yes: it is back, and `/memory` in a new
+    session lists it. CSRF:
     `curl -s -o /dev/null -w '%{http_code}\n' -X POST -d action=status http://<server>/plugins/claude-code-unraid/include/exec.php`
     returns 403.
 17. **Plugin update.** Install the previous release, then update from Plugins. Expected:

@@ -28,6 +28,7 @@ $ccu_tmux = $ccu_status['tmux'] ?? [];
 $ccu_dd = $ccu_status['data_dir'] ?? [];
 $ccu_auth = $ccu_status['auth'] ?? [];
 $ccu_sessions = is_array($ccu_status['sessions'] ?? null) ? $ccu_status['sessions'] : [];
+$ccu_workspaces = is_array($ccu_status['workspaces'] ?? null) ? $ccu_status['workspaces'] : [];
 $ccu_policy = is_array($ccu_status['policy_files'] ?? null) ? $ccu_status['policy_files'] : [];
 $ccu_remote_on = strtolower((string) ($ccu_cfg['REMOTE_CONTROL'] ?? 'no')) === 'yes';
 
@@ -85,7 +86,7 @@ _(Storage mode)_:
 : <?=ccu_h($ccu_status['mode'] ?? 'unknown')?> (config dir <?=ccu_h($ccu_status['config_dir'] ?? '')?>)
 
 _(Data directory)_:
-: <?=ccu_h($ccu_dd['path'] ?? '')?><?if (($ccu_dd['valid'] ?? false) !== true):?> <span class="orange-text">not usable: <?=ccu_h($ccu_dd['reason'] ?? '')?></span><?elseif (($ccu_dd['fuse'] ?? false) === true):?> (on /mnt/user, FUSE)<?endif;?>
+: <?=ccu_h($ccu_dd['path'] ?? '')?><?if (($ccu_dd['valid'] ?? false) !== true):?> <span class="orange-text">not usable: <?=ccu_h($ccu_dd['reason'] ?? '')?></span><?elseif (($ccu_dd['fuse'] ?? false) === true):?> (on /mnt/user, FUSE)<?endif;?><?if (is_int($ccu_dd['bytes'] ?? null)):?>, <?=ccu_h(ccu_bytes($ccu_dd['bytes']))?> used<?if (is_int($ccu_dd['transcripts_bytes'] ?? null)):?> (transcripts <?=ccu_h(ccu_bytes($ccu_dd['transcripts_bytes']))?>)<?endif;?><?endif;?>
 
 _(Login present)_:
 : <?=ccu_yesno($ccu_auth['login'] ?? false)?>
@@ -94,7 +95,7 @@ _(Emergency token)_:
 : <?=ccu_yesno($ccu_auth['emergency_token'] ?? false)?> (managed with `claude-unraid token`)
 
 _(Policy files)_:
-: <?=ccu_h($ccu_policy ? implode(', ', array_map('strval', $ccu_policy)) : 'none')?>
+: <?=ccu_h($ccu_policy ? implode(', ', array_map('strval', $ccu_policy)) : 'none')?><?if (($ccu_status['claude_md'] ?? false) === true):?>, CLAUDE.md (Unraid context)<?endif;?>
 
 </div>
 
@@ -114,9 +115,31 @@ _(Policy files)_:
 </table>
 
 <input type="button" value="_(Verify binary)_" onclick="ccuAction('verify')">
+<input type="button" value="_(Run doctor)_" onclick="ccuAction('doctor')">
 <input type="button" value="_(Restore sessions)_" onclick="ccuAction('restore')">
 <input type="button" value="_(Stop all sessions)_" onclick="ccuConfirmStop()">
 <input type="button" value="_(View log)_" onclick="openTerminal('log','Claude Code','claude-code-unraid/install.log')">
+<input type="button" value="_(View audit log)_" onclick="ccuAction('audit')">
+</div>
+
+<div markdown="1">
+### Workspaces
+
+<table class="ccu-workspaces">
+<tr><th>Workspace</th><th>Path</th><th>Last used</th><th>Session</th><th></th></tr>
+<?if ($ccu_workspaces):?>
+<?foreach ($ccu_workspaces as $ccu_w):?>
+<?[$ccu_wname, $ccu_wpath, $ccu_wmtime, $ccu_wstate] = array_pad(explode('|', (string) $ccu_w, 4), 4, '');?>
+<tr><td><?=ccu_h($ccu_wname)?></td><td><code><?=ccu_h($ccu_wpath)?></code></td><td><?=ccu_h(ctype_digit($ccu_wmtime) && (int) $ccu_wmtime > 0 ? date('Y-m-d H:i', (int) $ccu_wmtime) : '')?></td><td><?=ccu_h($ccu_wstate === '-' ? '' : $ccu_wstate)?></td><td><input type="button" value="_(Open terminal)_" onclick="openTerminal('ttyd', <?=ccu_h(json_encode($ccu_wname, JSON_UNESCAPED_SLASHES))?>, <?=ccu_h(json_encode($ccu_wpath, JSON_UNESCAPED_SLASHES))?>)"></td></tr>
+<?endforeach;?>
+<?else:?>
+<tr><td colspan="5">No workspaces yet. Create one from a terminal with <code>claude-unraid work &lt;name&gt;</code>.</td></tr>
+<?endif;?>
+</table>
+
+:ccu_workspaces_plug:
+The directories under the data directory's `work/` folder. "Open terminal" opens Unraid's web terminal in that directory; type `claude` there to start a session, or `claude-unraid start <workspace>` for a supervised one. Unraid runs one web terminal at a time: if one is already open, close it first, or the new window joins the shell that is already running.
+:end
 </div>
 
 <div markdown="1">
@@ -173,6 +196,13 @@ _(Allow auto mode)_:
 With *No*, Claude Code's classifier-driven auto mode is removed from the permission mode cycle and every command prompts (Manual mode). Bypass mode is always disabled; Claude Code refuses it as root anyway.
 :end
 
+_(Unraid context for every session)_:
+: <?=ccu_select('MANAGED_CLAUDE_MD', strtolower((string) ($ccu_cfg['MANAGED_CLAUDE_MD'] ?? 'yes')))?>
+
+:ccu_claudemd_plug:
+With *Yes*, the plugin keeps a short managed `CLAUDE.md` at `/etc/claude-code/CLAUDE.md`, which every session reads before any other instructions: what `/mnt/user`, the pools and appdata are, that a new top-level directory under them becomes a share, that the flash drive is read-only, and how to behave on a server other people depend on. Guidance only; the policy does the enforcing. A `/etc/claude-code/CLAUDE.md` written by something else is left alone.
+:end
+
 _(Allow writable /boot sessions (`claude --boot-rw`))_:
 : <?=ccu_select('ALLOW_BOOT_RW', strtolower((string) ($ccu_cfg['ALLOW_BOOT_RW'] ?? 'no')))?>
 
@@ -200,22 +230,34 @@ Hard limit for the plugin's array event handlers (emhttpd waits for them). 20 se
 </form>
 
 <script>
+var ccuTitles = {
+  verify: "_(Verify binary)_", doctor: "_(Doctor)_", restore: "_(Restore sessions)_",
+  'stop-all': "_(Stop all sessions)_", audit: "_(Audit log, last 200 tool calls)_"
+};
+// Lines from an action, escaped, in a scrollable block. ok picks the icon.
+function ccuShowOutput(action, lines, ok, done) {
+  var text = (lines && lines.length) ? lines.join('\n') : (ok ? 'done' : 'failed');
+  swal({
+    title: ccuTitles[action] || action,
+    text: '<pre style="text-align:left;max-height:60vh;overflow:auto;white-space:pre-wrap;margin:0;font-size:0.85em">' + $('<div/>').text(text).html() + '</pre>',
+    type: ok ? 'success' : 'error',
+    html: true,
+    confirmButtonText: "_(Ok)_"
+  }, done);
+}
 function ccuAction(action) {
+  var readOnly = (action === 'doctor' || action === 'audit');
   $.post('/plugins/claude-code-unraid/include/exec.php', {action: action, csrf_token: csrf_token}, function(data) {
-    var text = '';
-    if (data && data.output) text = data.output.join('\n');
-    else if (data && data.lines) text = data.lines.join('\n');
-    swal({
-      title: action,
-      text: $('<div/>').text(text || (data && data.ok ? 'done' : 'failed')).html().replace(/\n/g, '<br>'),
-      type: data && data.ok ? 'success' : 'error',
-      html: true,
-      confirmButtonText: "_(Ok)_"
-    }, function() { location.reload(); });
+    var lines = (data && data.output) ? data.output : ((data && data.lines) ? data.lines : []);
+    if (action === 'audit' && !lines.length) lines = ['no tool calls logged yet'];
+    ccuShowOutput(action, lines, !!(data && data.ok), readOnly ? undefined : function() { location.reload(); });
   }, 'json').fail(function(xhr) {
-    var msg = 'request failed';
-    try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
-    swal({title: action, text: $('<div/>').text(msg).html(), type: 'error', html: true, confirmButtonText: "_(Ok)_"});
+    var lines = ['request failed'];
+    try {
+      var d = JSON.parse(xhr.responseText);
+      lines = (d.output && d.output.length) ? d.output : ((d.lines && d.lines.length) ? d.lines : [d.error || 'request failed']);
+    } catch (e) {}
+    ccuShowOutput(action, lines, false);
   });
 }
 var ccuPolicyExampleText = JSON.stringify({permissions: {
