@@ -7,7 +7,7 @@ below is the release tag.
 
 ## [Unreleased]
 
-## [0.1.0-beta.1] - 2026-10-23
+## [0.1.0-beta.1] - 2026-10-31
 
 First public beta. Everything below is new.
 
