@@ -7,6 +7,8 @@ below is the release tag.
 
 ## [Unreleased]
 
+## [0.1.0-beta.3] - 2026-10-31
+
 ### Fixed
 
 - `claude-unraid` usage errors ended with their exit code (`... starting with a letter
