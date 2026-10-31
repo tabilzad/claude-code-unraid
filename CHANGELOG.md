@@ -7,6 +7,13 @@ below is the release tag.
 
 ## [Unreleased]
 
+## [0.1.0-beta.4] - 2026-10-31
+
+### Changed
+
+- Claude Code 2.1.309 replaces 2.1.308. The update downloads and verifies the new binary
+  (about 280 MB); the previous one stays cached on the flash drive.
+
 ### Added
 
 - A Permissions box in the settings page edits the `policy.d/webgui.json` drop-in: allow,
