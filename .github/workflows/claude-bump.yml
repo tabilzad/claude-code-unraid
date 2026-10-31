@@ -87,6 +87,11 @@ jobs:
             exit 0
           fi
           git commit -m "$title" -m "Pinned from the GPG-signed manifest of ${CANDIDATE}; the binary was downloaded and its sha256 and size matched."
+          # An earlier run may have pushed this branch already. The shallow checkout
+          # only knows main, and without a remote-tracking ref --force-with-lease
+          # expects the branch to be absent and rejects the push ("stale info").
+          git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}" \
+            || echo "no ${branch} on origin yet"
           git push --force-with-lease origin "$branch"
 
           body="$(mktemp)"

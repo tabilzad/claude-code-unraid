@@ -27,6 +27,14 @@ below is the release tag.
   last-used time and session state, and the settings page shows them with an "Open
   terminal" button that opens Unraid's web terminal in the workspace.
 
+### Fixed
+
+- The daily Claude Code bump workflow failed on every run after the first for the same
+  version: the push of the already existing `claude-bump/<version>` branch was rejected.
+  It now fetches the branch before pushing. Opening the pull request also needs the
+  repository to allow GitHub Actions to create pull requests, which `docs/RELEASING.md`
+  now says.
+
 ## [0.1.0-beta.3] - 2026-10-31
 
 ### Fixed
