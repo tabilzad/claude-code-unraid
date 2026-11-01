@@ -7,6 +7,8 @@ below is the release tag.
 
 ## [Unreleased]
 
+## [0.1.0-beta.5] - 2026-11-01
+
 ### Changed
 
 - The settings page has a layout of its own instead of the stock definition lists: a
