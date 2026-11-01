@@ -11,7 +11,7 @@
   <Name>Claude Code for Unraid</Name>
   <PluginURL>https://github.com/tabilzad/claude-code-unraid/releases/latest/download/claude-code-unraid.plg</PluginURL>
   <PluginAuthor>tabilzad</PluginAuthor>
-  <Support>https://github.com/tabilzad/claude-code-unraid/issues</Support>
+  <Support>https://forums.unraid.net/topic/201128-plugin-claude-code-for-unraid-claude-code-cli-on-the-host-with-sessions-that-survive-reboots-beta/</Support>
   <Project>https://github.com/tabilzad/claude-code-unraid</Project>
   <ReadMe>https://raw.githubusercontent.com/tabilzad/claude-code-unraid/main/README.md</ReadMe>
   <Overview>

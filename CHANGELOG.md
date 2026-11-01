@@ -7,6 +7,11 @@ below is the release tag.
 
 ## [Unreleased]
 
+### Changed
+
+- The plugin's support link (shown by the plugin manager and by Community Applications) is
+  the forum support thread instead of the GitHub issue tracker. Issues stay open.
+
 ## [0.1.0-beta.5] - 2026-11-01
 
 ### Changed

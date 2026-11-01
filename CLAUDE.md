@@ -14,7 +14,7 @@ Edit this table once. Everything else refers to these values.
 | GitHub repo | `tabilzad/claude-code-unraid` |
 | Minimum Unraid version | `7.0.0` (PHP 8.3+, glibc 2.40+; see docs/SPIKE.md) |
 | License | MIT |
-| Support URL | GitHub issues until the forum thread exists |
+| Support URL | `https://forums.unraid.net/topic/201128-plugin-claude-code-for-unraid-claude-code-cli-on-the-host-with-sessions-that-survive-reboots-beta/` (the `support` entity in the plg template; GitHub issues stay open too) |
 
 `PLUGIN` is used for every path: `/usr/local/emhttp/plugins/PLUGIN`, `/boot/config/plugins/PLUGIN`, `/var/log/plugins/PLUGIN`, `/run/PLUGIN`, syslog tag `PLUGIN`. Never hard-code a different name.
 

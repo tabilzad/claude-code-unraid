@@ -23,10 +23,13 @@ unchanged and run Scan on <https://ca.unraid.net/submit>.
 
 1. The repository must be public on GitHub, the account must have 2FA enabled, and an
    OSI-approved license file must sit at the repository root (`LICENSE`, MIT).
-2. Post the support thread (Plugin Support on `forums.unraid.net`). Put its URL into
-   `plugin/claude-code-unraid.plg.in` (`support` entity), `ca/claude-code-unraid.xml`
-   (`Support`) and `ca_profile.xml` (`Forum`), then cut the release. GitHub issues work
-   as the support link until then.
+2. The support thread exists:
+   <https://forums.unraid.net/topic/201128-plugin-claude-code-for-unraid-claude-code-cli-on-the-host-with-sessions-that-survive-reboots-beta/>
+   (posted in Plugin System with a note asking the moderators to move it to Plugin
+   Support, which is how that section is populated). Its URL is the `support` entity in
+   `plugin/claude-code-unraid.plg.in` and the `Support` of `ca/claude-code-unraid.xml`;
+   `make lint-ca` checks that the two agree. If the thread ever moves or is replaced,
+   change both and cut a release.
 3. Make sure `https://github.com/tabilzad/claude-code-unraid/releases/latest/download/claude-code-unraid.plg`
    resolves (every tag is a full release; see `docs/RELEASING.md`).
 4. Copy `ca/claude-code-unraid.xml` unchanged to `plugins/claude-code-unraid.xml` in the
