@@ -1,10 +1,18 @@
 # Community Applications files
 
+Community Applications keeps one feed repository per account, with one wrapper per
+plugin. The feed for this account is `tabilzad/unraid-plugins`; it holds a copy of the
+wrapper below as `plugins/claude-code-unraid.xml` and its own `ca_profile.xml`. The
+copy here is the source: change it here, run `make lint-ca`, then copy it into the feed
+unchanged and run Scan on <https://ca.unraid.net/submit>.
+
 - `ca/claude-code-unraid.xml`: the plugin wrapper CA reads (`<Plugin>` root). Its
   `PluginURL` must be byte-for-byte the `pluginURL` of the `.plg`
   (`plugin/claude-code-unraid.plg.in`); `make lint-ca` checks that, and that both
   XML files are well formed.
-- `ca_profile.xml` (repository root, where CA requires it): the repository profile.
+- `ca_profile.xml` (repository root): the profile this repository would carry if it were
+  registered on its own. The feed repository's profile is the one Community Applications
+  shows; this one stays so that `make lint-ca` can check the icon against it.
 - `ca/claude-code-unraid.png`: the icon, 256x256, not animated, not Anthropic's logo.
   Regenerate with `python3 scripts/make-icon.py ca/claude-code-unraid.png` (no
   dependencies beyond the Python standard library).
@@ -21,9 +29,13 @@
    as the support link until then.
 3. Make sure `https://github.com/tabilzad/claude-code-unraid/releases/latest/download/claude-code-unraid.plg`
    resolves (every tag is a full release; see `docs/RELEASING.md`).
-4. Open <https://ca.unraid.net/submit/new>, enter the repository URL, run **Validate**
-   and **Scan**, and fix whatever the validator reports. Plugins are reviewed by hand;
-   `docs/ca-moderator-notes.md` has the facts the reviewers will ask about (plugin
-   versus container, the closed-source binary, root, flash footprint, boot safety).
-5. After acceptance, the entry shows up in Apps within a few hours. Later releases need
+4. Copy `ca/claude-code-unraid.xml` unchanged to `plugins/claude-code-unraid.xml` in the
+   feed repository, run its `scripts/validate`, commit and push it.
+5. Open <https://ca.unraid.net/submit>, pick the feed repository, run **Validate** and
+   **Scan**, and fix whatever the validator reports. A plugin that is new to Community
+   Applications is reviewed by hand; `docs/ca-moderator-notes.md` has the facts the
+   reviewers will ask about (plugin versus container, the closed-source binary, root,
+   flash footprint, boot safety). Submitting this repository on its own instead draws
+   the "one template repository per account" warning.
+6. After acceptance, the entry shows up in Apps within a few hours. Later releases need
    no resubmission: CA reads the plg at `PluginURL`.
