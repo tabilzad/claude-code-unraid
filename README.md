@@ -47,7 +47,9 @@ was built (see [docs/RELEASING.md](docs/RELEASING.md)). It also fetches a small,
 tmux package for supervised sessions. If a download fails, the plugin still installs and
 tells you; nothing is ever downloaded during boot when the flash cache is valid.
 
-The settings page is at **Settings, User Utilities, Claude Code**.
+The settings page is at **Settings, User Utilities, Claude Code**:
+
+![The Claude Code settings page on Unraid: status cards, where things are, sessions](imgs/img.png)
 
 ## First login
 
