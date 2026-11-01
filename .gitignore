@@ -13,3 +13,6 @@
 /.dev-env.id
 /.cache/
 *.log
+
+# IDE
+/.idea/
