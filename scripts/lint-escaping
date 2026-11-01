@@ -8,8 +8,9 @@
  *
  * Flags every `<?= ... ?>`, `echo ...` and `print ...` whose expression
  * contains a `$variable` and is not wrapped in htmlspecialchars(), ccu_h(),
- * json_encode(), ccu_yesno(), ccu_select() (which escapes internally), or an
- * `(int)` cast, and is not a plain string literal. Justified exceptions go in
+ * json_encode(), ccu_yesno(), ccu_select(), ccu_badge(), ccu_yesno_badge()
+ * (the last three escape internally, see include/ui.php), or an `(int)` cast,
+ * and is not a plain string literal. Justified exceptions go in
  * the allow file, one per line: `relative/path:regex`. Exit 1 on findings.
  */
 declare(strict_types=1);
@@ -61,7 +62,7 @@ function files(array $paths): array
     return $out;
 }
 
-$safe = '/^\s*(htmlspecialchars|ccu_h|json_encode|ccu_yesno|ccu_select|\(int\)|intval|count)\s*\(?/';
+$safe = '/^\s*(htmlspecialchars|ccu_h|json_encode|ccu_yesno|ccu_select|ccu_badge|ccu_yesno_badge|\(int\)|intval|count)\s*\(?/';
 $findings = 0;
 foreach (files($paths) as $file) {
     $src = file_get_contents($file) ?: '';

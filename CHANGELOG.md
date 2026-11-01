@@ -7,6 +7,17 @@ below is the release tag.
 
 ## [Unreleased]
 
+### Changed
+
+- The settings page has a layout of its own instead of the stock definition lists: a
+  header with the plugin icon and the diagnostics buttons, summary cards for Claude Code,
+  storage mode, login, sessions, data size and plugin version, badges for every state,
+  warnings as notices, sections with hover rows and empty states for sessions and
+  workspaces, and a proper editor for the Permissions box. The stylesheet follows
+  Unraid's theme variables with fallbacks for the 7.0 themes (black, white, azure, gray)
+  and ships in the package; nothing is loaded from the network. The actions, settings
+  and endpoints are unchanged.
+
 ## [0.1.0-beta.4] - 2026-10-31
 
 ### Changed

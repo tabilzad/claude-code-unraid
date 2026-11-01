@@ -63,7 +63,7 @@ Edit this table once. Everything else refers to these values.
 
 ```
 src/                     # files packaged into the .txz, rooted at /
-  usr/local/emhttp/plugins/PLUGIN/   # pages, php, scripts, event/, policy/
+  usr/local/emhttp/plugins/PLUGIN/   # pages, php, scripts, event/, policy/, styles/, images/
   usr/local/bin/                     # claude launcher, claude-unraid helper
 plugin/PLUGIN.plg.in     # plg template; rendered by scripts/render-plg
 plugin/slack-desc        # Slackware package description packed into the txz

@@ -108,14 +108,17 @@ with `TXZ_URL=http://<ws>:8000/<package>.txz` passed to `make build`).
     --remote-control` is refused (exit 77) and `/remote-control` inside a session is
     refused by policy. Turn it on, apply, `claude-unraid start x --remote-control`: the
     session appears at claude.ai/code. Turn it off again.
-16. **WebGUI.** Settings, User Utilities, Claude Code renders in the light and the dark
-    theme; the status matches `claude-unraid status`; change "Transcript retention" to
+16. **WebGUI.** Settings, User Utilities, Claude Code renders in all four themes
+    (Settings, Display Settings: white, black, azure, gray): the header, the summary
+    cards, the badges and the tables are readable in each, nothing overflows in a narrow
+    browser window, and the plugin icon shows in the Settings grid; the cards and "Where things
+    are" match `claude-unraid status`; change "Transcript retention" to
     30 and Apply: the progress window shows no error and
     `/etc/claude-code/managed-settings.d/99-claude-code-unraid-baseline.json` now has
     `"cleanupPeriodDays": 30`; set the data directory to `/mnt/user/newshare` and Apply:
     the progress window shows `DATA_DIR not usable` and the cfg is unchanged. Buttons:
-    Verify binary (OK), Run doctor (PASS lines, no FAIL), View log (window opens), View
-    audit log (the tool calls from step 7, commands redacted). The Workspaces table lists
+    Verify binary (OK), Run doctor (PASS lines, no FAIL), View log (window opens), Audit
+    log (the tool calls from step 7, commands redacted). The Workspaces table lists
     the workspace from step 5 and "Open terminal" opens a web terminal whose prompt is in
     that directory. Set "Unraid context for every session" to No and Apply:
     `/etc/claude-code/CLAUDE.md` is gone; back to Yes: it is back, and `/memory` in a new

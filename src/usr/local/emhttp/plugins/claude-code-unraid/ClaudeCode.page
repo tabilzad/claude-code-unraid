@@ -1,7 +1,7 @@
 Menu="Utilities"
 Type="xmenu"
 Title="Claude Code"
-Icon="terminal"
+Icon="claude-code-unraid.png"
 ---
 <?PHP
 /* Claude Code for Unraid: settings page (SPEC section 12).
@@ -16,10 +16,16 @@ Icon="terminal"
  * The Permissions box edits the policy.d/webgui.json drop-in through the
  * policy-save action; include/policy.php validates the JSON before any write.
  * No token, account e-mail or transcript content ever reaches this page.
+ *
+ * Layout: the custom sections are plain HTML blocks styled by
+ * styles/claude-code-unraid.css (scoped to .ccu, themed through data-theme);
+ * the settings form keeps Unraid's markdown definition-list layout because
+ * /update.php and the inline help toggles depend on it.
  */
 $docroot ??= ($_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp');
 require_once "$docroot/plugins/claude-code-unraid/include/status.php";
 require_once "$docroot/plugins/claude-code-unraid/include/policy.php";
+require_once "$docroot/plugins/claude-code-unraid/include/ui.php";
 
 $ccu_status = ccu_status();
 $ccu_cfg = ccu_cfg();
@@ -31,24 +37,49 @@ $ccu_sessions = is_array($ccu_status['sessions'] ?? null) ? $ccu_status['session
 $ccu_workspaces = is_array($ccu_status['workspaces'] ?? null) ? $ccu_status['workspaces'] : [];
 $ccu_policy = is_array($ccu_status['policy_files'] ?? null) ? $ccu_status['policy_files'] : [];
 $ccu_remote_on = strtolower((string) ($ccu_cfg['REMOTE_CONTROL'] ?? 'no')) === 'yes';
+$ccu_theme = ccu_theme($display['theme'] ?? '');
+$ccu_css = '/plugins/claude-code-unraid/styles/claude-code-unraid.css?v='
+  . ccu_asset_version("$docroot/plugins/claude-code-unraid/styles/claude-code-unraid.css");
 
 $ccu_warnings = [];
 if (($ccu_status['flash_exported'] ?? false) === true) {
-  $ccu_warnings[] = 'The flash share is exported over SMB. The plugin settings and policy drop-ins are readable by anyone who can reach it'
-    . (($ccu_auth['emergency_token'] ?? false) === true ? ', and so is the emergency token. Set Main, Boot Device, Flash, SMB Security Settings, Export to No, or clear the token.' : '.');
+  $ccu_warnings[] = ['warn', 'The flash share is exported over SMB. The plugin settings and policy drop-ins are readable by anyone who can reach it'
+    . (($ccu_auth['emergency_token'] ?? false) === true ? ', and so is the emergency token. Set Main, Boot Device, Flash, SMB Security Settings, Export to No, or clear the token.' : '.')];
 }
 if (($ccu_dd['fuse'] ?? false) === true) {
-  $ccu_warnings[] = 'The data directory is on /mnt/user (FUSE). A direct pool path such as /mnt/cache/appdata/claude-code-unraid is faster and keeps the mover away from Claude\'s transcripts.';
+  $ccu_warnings[] = ['warn', 'The data directory is on /mnt/user (FUSE). A direct pool path such as /mnt/cache/appdata/claude-code-unraid is faster and keeps the mover away from Claude\'s transcripts.'];
 }
 if (($ccu_auth['emergency_token'] ?? false) === true) {
-  $ccu_warnings[] = 'An emergency token is stored on the flash drive. It is used only while the array is stopped and grants access to your Claude account; keep the flash share unexported.';
+  $ccu_warnings[] = ['warn', 'An emergency token is stored on the flash drive. It is used only while the array is stopped and grants access to your Claude account; keep the flash share unexported.'];
 }
 if ($ccu_remote_on) {
-  $ccu_warnings[] = 'Remote Control is allowed. Supervised sessions started with it can be driven from claude.ai or the Claude app, and their transcripts are stored on Anthropic\'s servers while connected.';
+  $ccu_warnings[] = ['warn', 'Remote Control is allowed. Supervised sessions started with it can be driven from claude.ai or the Claude app, and their transcripts are stored on Anthropic\'s servers while connected.'];
 }
 if ($ccu_status === []) {
-  $ccu_warnings[] = 'The plugin helper did not answer (claude-unraid status --json). Reinstall the plugin or check /var/log/claude-code-unraid/install.log.';
+  $ccu_warnings[] = ['bad', 'The plugin helper did not answer (claude-unraid status --json). Reinstall the plugin or check /var/log/claude-code-unraid/install.log.'];
 }
+
+/* Summary cards: value, one-line detail and a tone for the state dot. */
+$ccu_claude_ver = (string) ($ccu_claude['version'] ?? '');
+$ccu_claude_err = (string) ($ccu_claude['error'] ?? '');
+$ccu_claude_ok = ($ccu_claude['verified'] ?? false) === true;
+$ccu_claude_tone = $ccu_claude_ver === '' ? 'bad' : (($ccu_claude_ok && $ccu_claude_err === '') ? 'ok' : 'warn');
+$ccu_mode = (string) ($ccu_status['mode'] ?? 'unknown');
+$ccu_mode_tone = $ccu_mode === 'pool' ? 'ok' : ($ccu_mode === 'fallback' ? 'warn' : 'neutral');
+$ccu_login = ($ccu_auth['login'] ?? false) === true;
+$ccu_tmux_ok = ($ccu_tmux['available'] ?? false) === true;
+$ccu_running = 0;
+foreach ($ccu_sessions as $ccu_s) {
+  if ((explode('|', (string) $ccu_s, 3)[1] ?? '') === 'running') {
+    $ccu_running++;
+  }
+}
+$ccu_dd_ok = ($ccu_dd['valid'] ?? false) === true;
+$ccu_dd_bytes = $ccu_dd['bytes'] ?? null;
+$ccu_dd_tr = $ccu_dd['transcripts_bytes'] ?? null;
+$ccu_policy_raw = ccu_policy_read();
+$ccu_rule_count = ccu_policy_rule_count($ccu_policy_raw);
+
 function ccu_select(string $name, string $current): string {
   $out = '<select name="' . ccu_h($name) . '">';
   foreach (['no' => 'No', 'yes' => 'Yes'] as $v => $label) {
@@ -58,112 +89,164 @@ function ccu_select(string $name, string $current): string {
 }
 ?>
 
-<div markdown="1">
-**Claude Code for Unraid** installs Anthropic's Claude Code CLI on the host, keeps its login and conversations across reboots, and wraps it in an enforced policy. *This plugin is not affiliated with, endorsed by, or supported by Anthropic PBC or Lime Technology, Inc.* **Claude Code runs as root on this server**: the permission prompts in your terminal are your control. Read `docs/SECURITY.md` in the project before relying on it.
+<div class="ccu ccu-hero" data-theme="<?=ccu_h($ccu_theme)?>">
+<link rel="stylesheet" href="<?=ccu_h($ccu_css)?>">
+<div class="ccu-hero-mark"><img src="/plugins/claude-code-unraid/images/claude-code-unraid.png" alt=""></div>
+<div class="ccu-hero-copy">
+<h2 class="ccu-hero-title">Claude Code for Unraid</h2>
+<p class="ccu-hero-sub">Anthropic's Claude Code CLI on the host: login and conversations survive reboots, supervised sessions come back after the array starts, and every session runs under an enforced policy.</p>
+<p class="ccu-hero-fine">Not affiliated with, endorsed by, or supported by Anthropic PBC or Lime Technology, Inc. <strong>Claude Code runs as root on this server</strong>: the permission prompts in your terminal are your control.</p>
+</div>
+<div class="ccu-hero-actions">
+<button type="button" class="ccu-btn" onclick="ccuAction('verify')"><?=ccu_icon('shield')?><span>_(Verify binary)_</span></button>
+<button type="button" class="ccu-btn" onclick="ccuAction('doctor')"><?=ccu_icon('pulse')?><span>_(Run doctor)_</span></button>
+<button type="button" class="ccu-btn" onclick="openTerminal('log','Claude Code','claude-code-unraid/install.log')"><?=ccu_icon('log')?><span>_(View log)_</span></button>
+<button type="button" class="ccu-btn" onclick="ccuAction('audit')"><?=ccu_icon('audit')?><span>_(Audit log)_</span></button>
+</div>
 </div>
 
 <?if ($ccu_warnings):?>
-<div markdown="1" class="ccu-warnings">
-<?foreach ($ccu_warnings as $ccu_w):?>
-<p><i class="fa fa-warning"></i> <?=ccu_h($ccu_w)?></p>
+<div class="ccu ccu-notices" data-theme="<?=ccu_h($ccu_theme)?>">
+<?foreach ($ccu_warnings as [$ccu_w_tone, $ccu_w]):?>
+<div class="ccu-notice" data-tone="<?=ccu_h($ccu_w_tone)?>"><?=ccu_icon('warning')?><div><?=ccu_h($ccu_w)?></div></div>
 <?endforeach;?>
 </div>
 <?endif;?>
 
-<div markdown="1">
-### Status
-
-_(Plugin)_:
-: <?=ccu_h($ccu_status['plugin_version'] ?? 'unknown')?>
-
-_(Claude Code)_:
-: <?if (($ccu_claude['version'] ?? '') !== ''):?><?=ccu_h($ccu_claude['version'])?> (<?=ccu_h($ccu_claude['source'] ?? '')?>, verified: <?=ccu_yesno($ccu_claude['verified'] ?? false)?>)<?if (($ccu_claude['error'] ?? '') !== ''):?> <span class="orange-text">degraded: <?=ccu_h($ccu_claude['error'])?></span><?endif;?><?else:?><span class="red-text">not available<?if (($ccu_claude['error'] ?? '') !== ''):?>: <?=ccu_h($ccu_claude['error'])?><?endif;?></span><?endif;?>
-
-_(tmux)_:
-: <?if (($ccu_tmux['available'] ?? false) === true):?><?=ccu_h($ccu_tmux['version'] ?? '')?><?else:?><span class="orange-text">not available (supervised sessions disabled)<?if (($ccu_tmux['error'] ?? '') !== ''):?>: <?=ccu_h($ccu_tmux['error'])?><?endif;?></span><?endif;?>
-
-_(Storage mode)_:
-: <?=ccu_h($ccu_status['mode'] ?? 'unknown')?> (config dir <?=ccu_h($ccu_status['config_dir'] ?? '')?>)
-
-_(Data directory)_:
-: <?=ccu_h($ccu_dd['path'] ?? '')?><?if (($ccu_dd['valid'] ?? false) !== true):?> <span class="orange-text">not usable: <?=ccu_h($ccu_dd['reason'] ?? '')?></span><?elseif (($ccu_dd['fuse'] ?? false) === true):?> (on /mnt/user, FUSE)<?endif;?><?if (is_int($ccu_dd['bytes'] ?? null)):?>, <?=ccu_h(ccu_bytes($ccu_dd['bytes']))?> used<?if (is_int($ccu_dd['transcripts_bytes'] ?? null)):?> (transcripts <?=ccu_h(ccu_bytes($ccu_dd['transcripts_bytes']))?>)<?endif;?><?endif;?>
-
-_(Login present)_:
-: <?=ccu_yesno($ccu_auth['login'] ?? false)?>
-
-_(Emergency token)_:
-: <?=ccu_yesno($ccu_auth['emergency_token'] ?? false)?> (managed with `claude-unraid token`)
-
-_(Policy files)_:
-: <?=ccu_h($ccu_policy ? implode(', ', array_map('strval', $ccu_policy)) : 'none')?><?if (($ccu_status['claude_md'] ?? false) === true):?>, CLAUDE.md (Unraid context)<?endif;?>
-
+<div class="ccu ccu-cards" data-theme="<?=ccu_h($ccu_theme)?>">
+<div class="ccu-card" data-tone="<?=ccu_h($ccu_claude_tone)?>">
+<div class="ccu-card-label">_(Claude Code)_</div>
+<div class="ccu-card-value"><?=ccu_h($ccu_claude_ver !== '' ? $ccu_claude_ver : 'not available')?></div>
+<div class="ccu-card-sub"><?if ($ccu_claude_ver !== ''):?><?=ccu_badge($ccu_claude_ok ? 'verified' : 'unverified', $ccu_claude_ok ? 'ok' : 'warn')?><span><?=ccu_h($ccu_claude['source'] ?? '')?></span><?endif;?><?if ($ccu_claude_err !== ''):?><span class="ccu-badge" data-tone="warn" title="<?=ccu_h($ccu_claude_err)?>">degraded</span><?endif;?></div>
+</div>
+<div class="ccu-card" data-tone="<?=ccu_h($ccu_mode_tone)?>">
+<div class="ccu-card-label">_(Storage mode)_</div>
+<div class="ccu-card-value"><?=ccu_h($ccu_mode)?></div>
+<div class="ccu-card-sub"><?=ccu_h($ccu_mode === 'pool' ? 'login and transcripts persist on the pool' : ($ccu_mode === 'fallback' ? 'RAM only until the array starts' : 'helper did not answer'))?></div>
+</div>
+<div class="ccu-card" data-tone="<?=ccu_h($ccu_login ? 'ok' : 'neutral')?>">
+<div class="ccu-card-label">_(Login)_</div>
+<div class="ccu-card-value"><?=ccu_h($ccu_login ? 'yes' : 'no')?></div>
+<div class="ccu-card-sub"><span>emergency token</span><?=ccu_yesno_badge($ccu_auth['emergency_token'] ?? false)?></div>
+</div>
+<div class="ccu-card" data-tone="<?=ccu_h($ccu_tmux_ok ? ($ccu_running > 0 ? 'info' : 'neutral') : 'warn')?>">
+<div class="ccu-card-label">_(Sessions)_</div>
+<div class="ccu-card-value"><?=(int) $ccu_running?></div>
+<div class="ccu-card-sub"><?if ($ccu_tmux_ok):?><span>supervised, tmux <?=ccu_h($ccu_tmux['version'] ?? '')?></span><?else:?><?=ccu_badge('tmux missing', 'warn')?><?endif;?></div>
+</div>
+<div class="ccu-card" data-tone="<?=ccu_h($ccu_dd_ok ? 'ok' : 'bad')?>">
+<div class="ccu-card-label">_(Data)_</div>
+<div class="ccu-card-value"><?=ccu_h($ccu_dd_ok ? (is_int($ccu_dd_bytes) ? ccu_bytes($ccu_dd_bytes) : 'unknown') : 'not usable')?></div>
+<div class="ccu-card-sub"><?if ($ccu_dd_ok && is_int($ccu_dd_tr)):?><span>transcripts <?=ccu_h(ccu_bytes($ccu_dd_tr))?></span><?elseif (!$ccu_dd_ok):?><span><?=ccu_h($ccu_dd['reason'] ?? '')?></span><?endif;?></div>
+</div>
+<div class="ccu-card" data-tone="neutral">
+<div class="ccu-card-label">_(Plugin)_</div>
+<div class="ccu-card-value"><?=ccu_h($ccu_status['plugin_version'] ?? 'unknown')?></div>
+<div class="ccu-card-sub"><span><?=(int) count($ccu_policy)?> policy file<?=count($ccu_policy) === 1 ? '' : 's'?></span><?if (($ccu_status['claude_md'] ?? false) === true):?><?=ccu_badge('CLAUDE.md', 'info')?><?endif;?></div>
+</div>
 </div>
 
-<div markdown="1">
-### Sessions
+<div class="ccu ccu-section" data-theme="<?=ccu_h($ccu_theme)?>">
+<div class="ccu-section-head">
+<div class="ccu-section-copy">
+<h3 class="ccu-section-title"><?=ccu_icon('folder')?>_(Where things are)_</h3>
+<p class="ccu-section-desc">The same facts as <code>claude-unraid status</code> in a terminal.</p>
+</div>
+</div>
+<div class="ccu-kv">
+<div class="ccu-k">_(Data directory)_</div>
+<div class="ccu-v"><span class="ccu-path"><?=ccu_h($ccu_dd['path'] ?? '')?></span><?if (!$ccu_dd_ok):?><?=ccu_badge('not usable', 'bad')?><span><?=ccu_h($ccu_dd['reason'] ?? '')?></span><?elseif (($ccu_dd['fuse'] ?? false) === true):?><?=ccu_badge('/mnt/user, FUSE', 'warn')?><?endif;?></div>
+<div class="ccu-k">_(Config directory)_</div>
+<div class="ccu-v"><span class="ccu-path"><?=ccu_h($ccu_status['config_dir'] ?? '')?></span></div>
+<div class="ccu-k">_(Policy files)_</div>
+<div class="ccu-v"><?if ($ccu_policy):?><?foreach ($ccu_policy as $ccu_pf):?><span class="ccu-path"><?=ccu_h((string) $ccu_pf)?></span><?endforeach;?><?else:?><span>none</span><?endif;?><?if (($ccu_status['claude_md'] ?? false) === true):?><span class="ccu-path">CLAUDE.md</span><span>(Unraid context)</span><?endif;?></div>
+<div class="ccu-k">_(tmux)_</div>
+<div class="ccu-v"><?if ($ccu_tmux_ok):?><span><?=ccu_h($ccu_tmux['version'] ?? '')?></span><?else:?><?=ccu_badge('not available', 'warn')?><span>supervised sessions disabled<?if (($ccu_tmux['error'] ?? '') !== ''):?>: <?=ccu_h($ccu_tmux['error'])?><?endif;?></span><?endif;?></div>
+<div class="ccu-k">_(Emergency token)_</div>
+<div class="ccu-v"><?=ccu_yesno_badge($ccu_auth['emergency_token'] ?? false)?><span>managed with <code class="ccu-cmd">claude-unraid token</code></span></div>
+</div>
+</div>
 
-<table class="ccu-sessions">
-<tr><th>Workspace</th><th>State</th><th>Session</th><th>Started</th><th>Attach</th></tr>
+<div class="ccu ccu-section" data-theme="<?=ccu_h($ccu_theme)?>">
+<div class="ccu-section-head">
+<div class="ccu-section-copy">
+<h3 class="ccu-section-title"><?=ccu_icon('sessions')?>_(Sessions)_</h3>
+<p class="ccu-section-desc">Supervised sessions run in the bundled tmux, survive your SSH session, are stopped cleanly before the array stops and brought back after it starts.</p>
+</div>
+<div class="ccu-toolbar">
+<button type="button" class="ccu-btn" onclick="ccuAction('restore')"><?=ccu_icon('restore')?><span>_(Restore sessions)_</span></button>
+<button type="button" class="ccu-btn ccu-btn-warn" onclick="ccuConfirmStop()"><?=ccu_icon('stop')?><span>_(Stop all)_</span></button>
+</div>
+</div>
 <?if ($ccu_sessions):?>
+<table class="ccu-table">
+<thead><tr><th>_(Workspace)_</th><th>_(State)_</th><th>_(Session)_</th><th>_(Started)_</th><th>_(Attach)_</th></tr></thead>
+<tbody>
 <?foreach ($ccu_sessions as $ccu_s):?>
 <?[$ccu_ws, $ccu_state, $ccu_sid, $ccu_started] = array_pad(explode('|', (string) $ccu_s, 4), 4, '');?>
-<tr><td><?=ccu_h($ccu_ws)?></td><td><?=ccu_h($ccu_state)?></td><td><?=ccu_h(substr($ccu_sid, 0, 12))?></td><td><?=ccu_h($ccu_started)?></td><td><code>claude-unraid attach <?=ccu_h($ccu_ws)?></code></td></tr>
+<tr><td><?=ccu_h($ccu_ws)?></td><td><?=ccu_badge($ccu_state, $ccu_state === 'running' ? 'ok' : 'neutral')?></td><td><span class="ccu-path"><?=ccu_h(substr($ccu_sid, 0, 12))?></span></td><td><?=ccu_h($ccu_started)?></td><td><code class="ccu-cmd">claude-unraid attach <?=ccu_h($ccu_ws)?></code></td></tr>
 <?endforeach;?>
-<?else:?>
-<tr><td colspan="5">No supervised sessions. Start one from a terminal with <code>claude-unraid start &lt;workspace&gt;</code>.</td></tr>
-<?endif;?>
+</tbody>
 </table>
-
-<input type="button" value="_(Verify binary)_" onclick="ccuAction('verify')">
-<input type="button" value="_(Run doctor)_" onclick="ccuAction('doctor')">
-<input type="button" value="_(Restore sessions)_" onclick="ccuAction('restore')">
-<input type="button" value="_(Stop all sessions)_" onclick="ccuConfirmStop()">
-<input type="button" value="_(View log)_" onclick="openTerminal('log','Claude Code','claude-code-unraid/install.log')">
-<input type="button" value="_(View audit log)_" onclick="ccuAction('audit')">
+<?else:?>
+<div class="ccu-empty"><?=ccu_icon('sessions')?><p class="ccu-empty-title">_(No supervised sessions)_</p><p class="ccu-empty-msg">_(Start one from a terminal in a workspace, attach with the same name, detach with Ctrl-b d)_.</p><code class="ccu-cmd">claude-unraid start &lt;workspace&gt;</code></div>
+<?endif;?>
 </div>
 
-<div markdown="1">
-### Workspaces
-
-<table class="ccu-workspaces">
-<tr><th>Workspace</th><th>Path</th><th>Last used</th><th>Session</th><th></th></tr>
+<div class="ccu ccu-section" data-theme="<?=ccu_h($ccu_theme)?>">
+<div class="ccu-section-head">
+<div class="ccu-section-copy">
+<h3 class="ccu-section-title"><?=ccu_icon('terminal')?>_(Workspaces)_</h3>
+<p class="ccu-section-desc">The directories under the data directory's <code>work/</code> folder. Open terminal starts Unraid's web terminal there: type <code>claude</code> for a session, or <code>claude-unraid start &lt;workspace&gt;</code> for a supervised one.</p>
+</div>
+</div>
 <?if ($ccu_workspaces):?>
+<table class="ccu-table">
+<thead><tr><th>_(Workspace)_</th><th>_(Path)_</th><th>_(Last used)_</th><th>_(Session)_</th><th></th></tr></thead>
+<tbody>
 <?foreach ($ccu_workspaces as $ccu_w):?>
 <?[$ccu_wname, $ccu_wpath, $ccu_wmtime, $ccu_wstate] = array_pad(explode('|', (string) $ccu_w, 4), 4, '');?>
-<tr><td><?=ccu_h($ccu_wname)?></td><td><code><?=ccu_h($ccu_wpath)?></code></td><td><?=ccu_h(ctype_digit($ccu_wmtime) && (int) $ccu_wmtime > 0 ? date('Y-m-d H:i', (int) $ccu_wmtime) : '')?></td><td><?=ccu_h($ccu_wstate === '-' ? '' : $ccu_wstate)?></td><td><input type="button" value="_(Open terminal)_" onclick="openTerminal('ttyd', <?=ccu_h(json_encode($ccu_wname, JSON_UNESCAPED_SLASHES))?>, <?=ccu_h(json_encode($ccu_wpath, JSON_UNESCAPED_SLASHES))?>)"></td></tr>
+<tr><td><?=ccu_h($ccu_wname)?></td><td><span class="ccu-path"><?=ccu_h($ccu_wpath)?></span></td><td><?=ccu_h(ctype_digit($ccu_wmtime) && (int) $ccu_wmtime > 0 ? date('Y-m-d H:i', (int) $ccu_wmtime) : '')?></td><td><?if ($ccu_wstate !== '' && $ccu_wstate !== '-'):?><?=ccu_badge($ccu_wstate, $ccu_wstate === 'running' ? 'ok' : 'neutral')?><?endif;?></td><td class="ccu-td-actions"><button type="button" class="ccu-btn ccu-btn-sm" onclick="openTerminal('ttyd', <?=ccu_h(json_encode($ccu_wname, JSON_UNESCAPED_SLASHES))?>, <?=ccu_h(json_encode($ccu_wpath, JSON_UNESCAPED_SLASHES))?>)"><?=ccu_icon('terminal')?><span>_(Open terminal)_</span></button></td></tr>
 <?endforeach;?>
-<?else:?>
-<tr><td colspan="5">No workspaces yet. Create one from a terminal with <code>claude-unraid work &lt;name&gt;</code>.</td></tr>
-<?endif;?>
+</tbody>
 </table>
-
-:ccu_workspaces_plug:
-The directories under the data directory's `work/` folder. "Open terminal" opens Unraid's web terminal in that directory; type `claude` there to start a session, or `claude-unraid start <workspace>` for a supervised one. Unraid runs one web terminal at a time: if one is already open, close it first, or the new window joins the shell that is already running.
-:end
+<?else:?>
+<div class="ccu-empty"><?=ccu_icon('folder')?><p class="ccu-empty-title">_(No workspaces yet)_</p><p class="ccu-empty-msg">_(A workspace is a directory the plugin knows about: sessions started there are findable, resumable and restorable)_.</p><code class="ccu-cmd">claude-unraid work &lt;name&gt;</code></div>
+<?endif;?>
+<blockquote class="inline_help">
+Unraid runs one web terminal at a time: if one is already open, close it first, or the new window joins the shell that is already running.
+</blockquote>
 </div>
 
-<div markdown="1">
-### Permissions
-
-Your own permission rules, kept on the flash drive as `/boot/config/plugins/claude-code-unraid/policy.d/webgui.json` and loaded into every session as the managed drop-in `50-user-webgui.json`. `allow` rules run without a prompt, `ask` rules always prompt, `deny` rules are refused. The plugin's baseline loads after this file, so what it locks (Manual mode, no bypass mode, the catastrophic-command deny list, the guard and audit hooks) cannot be changed here: such a key is reported and ignored. Saving applies the rules to sessions started from then on; running sessions keep the old rules until restarted. Save an empty box to remove the file.
-
-Rule syntax: `Bash(docker compose *)` matches every `docker compose` command (keep the space before the `*`), `Bash(uptime)` matches exactly that command, `Bash` alone allows every shell command, `WebFetch(domain:docs.unraid.net)` allows fetching from one domain, `Read(./.env)` names a file relative to the workspace. A prompt's "Yes, and don't ask again" writes a rule into the workspace's own `.claude/settings.local.json` instead, which is fine for rules you want in one workspace only.
+<div class="ccu ccu-section" data-theme="<?=ccu_h($ccu_theme)?>">
+<div class="ccu-section-head">
+<div class="ccu-section-copy">
+<h3 class="ccu-section-title"><?=ccu_icon('shield')?>_(Permissions)_</h3>
+<p class="ccu-section-desc">Your own permission rules, kept on the flash drive and loaded into every session as a managed drop-in. <code>allow</code> rules run without a prompt, <code>ask</code> rules always prompt, <code>deny</code> rules are refused. Everything here is additive: what the baseline locks (Manual mode, no bypass mode, the catastrophic-command deny list, the guard and audit hooks) is reported and ignored. Saving applies to sessions started from then on; save an empty box to remove the file.</p>
+</div>
+</div>
+<div class="ccu-editor">
+<div class="ccu-editor-meta"><span class="ccu-path">/boot/config/plugins/claude-code-unraid/policy.d/webgui.json</span><span><?if ($ccu_rule_count === null):?><?=ccu_h(trim($ccu_policy_raw) === '' ? 'no file yet' : 'not valid JSON')?><?else:?><?=(int) $ccu_rule_count?> rule<?=ccu_h($ccu_rule_count === 1 ? '' : 's')?><?endif;?></span><span>installed as <span class="ccu-path">50-user-webgui.json</span></span></div>
+<textarea id="ccu_policy" rows="14" spellcheck="false" wrap="off" placeholder='{ "permissions": { "allow": [ "Bash(docker compose *)" ] } }'><?=ccu_h($ccu_policy_raw)?></textarea>
+<div class="ccu-editor-actions">
+<button type="button" class="ccu-btn" onclick="ccuPolicyExample()"><?=ccu_icon('example')?><span>_(Insert example)_</span></button>
+<button type="button" class="ccu-btn ccu-btn-primary" onclick="ccuSavePolicy()"><?=ccu_icon('save')?><span>_(Save permissions)_</span></button>
+</div>
+</div>
+<p class="ccu-help">Rule syntax: <code>Bash(docker compose *)</code> matches every <code>docker compose</code> command (keep the space before the <code>*</code>), <code>Bash(uptime)</code> matches exactly that command, <code>Bash</code> alone allows every shell command, <code>WebFetch(domain:docs.unraid.net)</code> allows fetching from one domain, <code>Read(./.env)</code> names a file relative to the workspace. A prompt's "Yes, and don't ask again" writes a rule into the workspace's own <code>.claude/settings.local.json</code> instead, which is fine for rules you want in one workspace only.</p>
 </div>
 
-<div>
-<textarea id="ccu_policy" rows="14" spellcheck="false" wrap="off" style="width:100%;max-width:900px;font-family:monospace;white-space:pre;" placeholder='{ "permissions": { "allow": [ "Bash(docker compose *)" ] } }'><?=ccu_h(ccu_policy_read())?></textarea>
-<p>
-<input type="button" value="_(Save permissions)_" onclick="ccuSavePolicy()">
-<input type="button" value="_(Insert example)_" onclick="ccuPolicyExample()">
-</p>
+<div class="ccu ccu-section-head" data-theme="<?=ccu_h($ccu_theme)?>">
+<div class="ccu-section-copy">
+<h3 class="ccu-section-title"><?=ccu_icon('info')?>_(Settings)_</h3>
+<p class="ccu-section-desc">Saved to the flash drive. Apply re-renders the managed policy; a data directory change takes effect the next time the array starts. The Help button explains each setting.</p>
+</div>
 </div>
 
 <form markdown="1" method="POST" action="/update.php" target="progressFrame">
 <input type="hidden" name="#file" value="claude-code-unraid/claude-code-unraid.cfg">
 <input type="hidden" name="#include" value="/plugins/claude-code-unraid/include/update.cfg.php">
 <input type="hidden" name="#command" value="/plugins/claude-code-unraid/scripts/install-policy">
-
-### Settings
 
 _(Data directory)_:
 : <input type="text" name="DATA_DIR" maxlength="200" value="<?=ccu_h($ccu_cfg['DATA_DIR'] ?? '')?>" placeholder="auto: <appdata>/claude-code-unraid" spellcheck="false">
