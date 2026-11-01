@@ -23,7 +23,7 @@
 <!ENTITY pluginVersion "0.1.0-beta.1">
 <!ENTITY gitURL        "https://github.com/tabilzad/claude-code-unraid">
 <!ENTITY pluginURL     "&gitURL;/releases/latest/download/&name;.plg">
-<!ENTITY support       "&gitURL;/issues">
+<!ENTITY support       "https://forums.unraid.net/topic/201128-plugin-claude-code-for-unraid-claude-code-cli-on-the-host-with-sessions-that-survive-reboots-beta/">
 <!ENTITY launch        "Settings/ClaudeCode">
 <!ENTITY icon          "terminal">
 <!ENTITY minVer        "7.0.0">
