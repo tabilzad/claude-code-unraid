@@ -13,7 +13,7 @@
 #
 # PHP 8.3 matches Unraid 7.0 to 7.2; Unraid 7.3 ships PHP 8.4, so the code must
 # avoid anything deprecated in 8.4 (php -l does not catch that; keep it simple).
-FROM php:8.5-cli-bookworm@sha256:104890ada56869090c9cd0ec709fe205834d3e383b46d9995dc16cd6388a9302
+FROM php:8.5-cli-bookworm@sha256:050713ce008e2360ea9dc96e1f9a075690132388d917fc3552806f7a7be6f2a0
 
 ARG SHELLCHECK_VERSION=0.11.0
 ARG SHELLCHECK_SHA256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
