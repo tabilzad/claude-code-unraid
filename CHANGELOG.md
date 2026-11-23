@@ -7,12 +7,12 @@ below is the release tag.
 
 ## [Unreleased]
 
-## [0.1.0-beta.6] - 2026-11-16
+## [0.1.0-beta.6] - 2026-11-23
 
 ### Changed
 
-- Claude Code 2.1.311 replaces 2.1.309. The update downloads and verifies the new binary
-  (about 280 MB); the previous one stays cached on the flash drive.
+- Claude Code 2.1.323 replaces 2.1.309. The update downloads and verifies the new binary
+  (about 345 MB, up from 280 MB); the previous one stays cached on the flash drive.
 - The plugin's support link (shown by the plugin manager and by Community Applications) is
   the forum support thread instead of the GitHub issue tracker. Issues stay open.
 
