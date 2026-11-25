@@ -7,6 +7,13 @@ below is the release tag.
 
 ## [Unreleased]
 
+## [0.1.0-beta.7] - 2026-11-25
+
+### Changed
+
+- Claude Code 2.1.325 replaces 2.1.323. The update downloads and verifies the new binary
+  (about 350 MB); the previous one stays cached on the flash drive.
+
 ## [0.1.0-beta.6] - 2026-11-23
 
 ### Changed
